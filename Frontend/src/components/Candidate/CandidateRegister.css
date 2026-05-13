@@ -155,6 +155,89 @@
   color: #64748b;
 }
 
+.vh-resume-choice-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vh-create-resume-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: fit-content;
+  min-height: 32px;
+  padding: 7px 10px;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.vh-create-resume-btn:hover {
+  background: #e0e7ff;
+  border-color: #818cf8;
+}
+
+.vh-selected-file {
+  margin: 0;
+  color: #475569;
+  font-size: 0.75rem;
+  word-break: break-word;
+}
+
+.resume-registration-form-grid {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.resume-registration-preview-panel {
+  overflow: hidden;
+}
+
+.resume-registration-preview-shell {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding: 18px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.resume-registration-preview-sheet {
+  width: min(100%, 760px);
+  min-height: 720px;
+  padding: 36px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+}
+
+.resume-registration-preview-sheet .resume-template-preview-root {
+  min-height: auto;
+  box-shadow: none;
+  border: 0;
+}
+
+@media (max-width: 768px) {
+  .resume-registration-preview-shell {
+    padding: 10px;
+  }
+
+  .resume-registration-preview-sheet {
+    min-height: 560px;
+    padding: 18px;
+  }
+}
+
 .vh-reg-actions {
   display: flex;
   flex-direction: column;

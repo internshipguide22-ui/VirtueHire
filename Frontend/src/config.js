@@ -5,13 +5,15 @@ const isLocal =
 
 export const API_BASE_URL = isLocal
   ? "http://localhost:8081/api"
-  : "https://backend.virtuehire.in/api";
+  : "https://admin.virtuehire.in/api";
 
 export const WS_BASE_URL = isLocal
   ? "http://localhost:8081"
-  : "https://backend.virtuehire.in";
+  : "https://admin.virtuehire.in";
 
-export default {
+const config = {
   API_BASE_URL,
   WS_BASE_URL,
 };
+
+export default config;

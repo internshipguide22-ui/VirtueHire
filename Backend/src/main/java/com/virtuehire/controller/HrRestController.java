@@ -1,5 +1,8 @@
 package com.virtuehire.controller;
-
+import com.virtuehire.model.AssessmentResult;
+import java.util.Optional;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.virtuehire.model.Candidate;
 import com.virtuehire.model.Hr;
 import com.virtuehire.model.Question;
@@ -19,6 +22,7 @@ import jakarta.servlet.http.HttpSession;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +32,8 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
 import java.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +54,7 @@ public class HrRestController {
     private final HiringWorkflowService hiringWorkflowService;
     private final TestAllocationService testAllocationService;
     private final AssessmentSectionRepository assessmentSectionRepository;
+    private final ObjectMapper objectMapper;
     private final Path uploadDir;
 
     public HrRestController(HrService hrService, CandidateService candidateService,
@@ -57,6 +64,7 @@ public class HrRestController {
             HiringWorkflowService hiringWorkflowService,
             TestAllocationService testAllocationService,
             AssessmentSectionRepository assessmentSectionRepository,
+            ObjectMapper objectMapper,
             @Value("${file.upload-dir}") String uploadDirPath) {
         this.hrService = hrService;
         this.candidateService = candidateService;
@@ -67,6 +75,7 @@ public class HrRestController {
         this.hiringWorkflowService = hiringWorkflowService;
         this.testAllocationService = testAllocationService;
         this.assessmentSectionRepository = assessmentSectionRepository;
+        this.objectMapper = objectMapper;
         this.uploadDir = StoragePathResolver.resolveUploadDir(uploadDirPath);
     }
 
@@ -86,8 +95,17 @@ public class HrRestController {
             Files.createDirectories(uploadDir);
 
         if (idProofFile != null && !idProofFile.isEmpty()) {
-            String fileName = System.currentTimeMillis() + "_" + idProofFile.getOriginalFilename();
-            Path path = uploadDir.resolve(fileName);
+            String originalName = Paths.get(idProofFile.getOriginalFilename() == null
+                    ? "id-proof.bin"
+                    : idProofFile.getOriginalFilename()).getFileName().toString().trim();
+            if (originalName.isBlank()) {
+                originalName = "id-proof.bin";
+            }
+            String fileName = UUID.randomUUID() + "_" + originalName;
+            Path path = uploadDir.resolve(fileName).normalize();
+            if (!path.startsWith(uploadDir)) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Invalid ID proof filename"));
+            }
             idProofFile.transferTo(path.toFile());
             hr.setIdProofPath(fileName);
         } else {
@@ -218,6 +236,7 @@ public class HrRestController {
                     .orElse("Section " + r.getLevel());
 
             Map<String, Object> row = new HashMap<>();
+            row.put("id", r.getId()); // FIX: Include result ID for HR to review answers
             row.put("subject", r.getSubject());
             row.put("level", r.getLevel());
             row.put("score", r.getScore());
@@ -302,23 +321,35 @@ public class HrRestController {
             return ResponseEntity.notFound().build();
 
         try {
-            Path filePath = uploadDir.resolve(candidate.getResumePath()).normalize();
-            Resource resource = new UrlResource(filePath.toUri());
-            if (!resource.exists())
-                return ResponseEntity.notFound().build();
+            return serveStoredFile(candidate.getResumePath(), disposition);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().build();
+        }
+    }
 
-            String contentType = Files.probeContentType(filePath);
-            if (contentType == null || contentType.isBlank()) {
-                contentType = "application/octet-stream";
-            }
+    // ------------------ VIEW PROFILE PICTURE ------------------
+    @GetMapping("/candidates/{candidateId}/profile-picture")
+    public ResponseEntity<Resource> viewProfilePicture(
+            @PathVariable Long candidateId,
+            @RequestParam(defaultValue = "inline") String disposition,
+            HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null) {
+            return ResponseEntity.status(401).build();
+        }
 
-            String normalizedDisposition = "inline".equalsIgnoreCase(disposition) ? "inline" : "attachment";
+        hr = refreshHr(hr, session);
+        if (!hrService.isAccessAllowed(hr)) {
+            return ResponseEntity.status(403).build();
+        }
 
-            return ResponseEntity.ok()
-                    .contentType(MediaType.parseMediaType(contentType))
-                    .header(HttpHeaders.CONTENT_DISPOSITION, normalizedDisposition + "; filename=\"" + resource.getFilename() + "\"")
-                    .body(resource);
+        Candidate candidate = candidateService.findById(candidateId).orElse(null);
+        if (candidate == null || candidate.getProfilePic() == null || candidate.getProfilePic().isBlank()) {
+            return ResponseEntity.notFound().build();
+        }
 
+        try {
+            return serveStoredFile(candidate.getProfilePic(), disposition);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().build();
         }
@@ -403,7 +434,7 @@ public class HrRestController {
             return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
 
         try {
-            questionService.saveQuestionsFromUpload(file, testName, input1, output1, input2, output2);
+            questionService.saveQuestionsFromUpload(file, testName, input1, output1, input2, output2, "HR", hr.getId());
             return ResponseEntity.ok(Map.of("message", "Questions uploaded successfully for " + testName));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -416,11 +447,11 @@ public class HrRestController {
     @PostMapping("/assessments/create")
     @SuppressWarnings("unchecked")
     public ResponseEntity<?> createAssessment(@RequestBody Map<String, Object> payload, HttpSession session) {
-        Hr hr = (Hr) session.getAttribute("hr");
-        if (hr == null)
-            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
-
         try {
+            Hr hr = (Hr) session.getAttribute("hr");
+            if (hr == null)
+                return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+
             String assessmentName = (String) payload.get("assessmentName");
             String description = (String) payload.getOrDefault("description", "");
             List<Map<String, Object>> sections = (List<Map<String, Object>>) payload.get("sections");
@@ -429,19 +460,30 @@ public class HrRestController {
                 return ResponseEntity.badRequest().body(Map.of("error", "Invalid assessment data."));
             }
 
-            Assessment assessment = assessmentService.createAssessment(assessmentName, description, sections);
+            Assessment assessment = assessmentService.createAssessment(assessmentName, description, sections, hr.getId());
             return ResponseEntity.ok(Map.of("message", "Assessment created successfully", "assessmentId", assessment.getId()));
         } catch (RuntimeException e) {
+            logger.warn("HR assessment creation failed: {}", e.getMessage(), e);
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("HR assessment creation failed unexpectedly", e);
             return ResponseEntity.status(500).body(Map.of("error", "Failed to create assessment: " + e.getMessage()));
+        } catch (Throwable e) {
+            logger.error("HR assessment creation failed fatally", e);
+            return ResponseEntity.status(500).body(Map.of(
+                    "error",
+                    "Failed to create assessment: " + e.getClass().getSimpleName()
+                            + (e.getMessage() != null && !e.getMessage().isBlank() ? " - " + e.getMessage() : "")));
         }
     }
 
     @GetMapping("/subjects")
-    public ResponseEntity<?> getSubjects() {
-        return ResponseEntity.ok(Map.of("subjects", questionService.getAllSubjects()));
+    public ResponseEntity<?> getSubjects(HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null)
+            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+
+        return ResponseEntity.ok(Map.of("subjects", questionService.getAllSubjectsForHr(hr.getId())));
     }
 
     @GetMapping("/subjects-info")
@@ -450,11 +492,11 @@ public class HrRestController {
         if (hr == null)
             return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
 
-        List<String> subjects = questionService.getAllSubjects();
+        List<String> subjects = questionService.getAllSubjectsForHr(hr.getId());
         List<Map<String, Object>> infoList = new ArrayList<>();
 
         for (String sub : subjects) {
-            List<Question> questions = questionService.getQuestionsBySubject(sub);
+            List<Question> questions = questionService.getQuestionsBySubjectForHr(sub, hr.getId());
             int count = questions.size();
             int compilerCount = (int) questions.stream().filter(Question::isHasCompiler).count();
             int noCompilerCount = count - compilerCount;
@@ -474,8 +516,78 @@ public class HrRestController {
         if (hr == null)
             return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
 
-        List<Question> questions = questionService.getQuestionsBySubject(subject);
+        List<Question> questions = questionService.getQuestionsBySubjectForHr(subject, hr.getId());
         return ResponseEntity.ok(Map.of("questions", questions));
+    }
+
+    @GetMapping("/questions/manual")
+    public ResponseEntity<?> getManualQuestions(
+            @RequestParam(required = false) String subject,
+            HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "questions", questionService.getManualQuestionsForHr(hr.getId(), subject)));
+    }
+
+    @PostMapping("/questions/manual")
+    public ResponseEntity<?> createManualQuestion(
+            @RequestBody Map<String, Object> payload,
+            HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+        }
+
+        try {
+            return ResponseEntity.ok(Map.of(
+                    "message", "Question created successfully",
+                    "question", questionService.createManualQuestionForHr(toManualQuestionDraft(payload), hr.getId())));
+        } catch (RuntimeException ex) {
+            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        }
+    }
+
+    @PutMapping("/questions/manual/{questionId}")
+    public ResponseEntity<?> updateManualQuestion(
+            @PathVariable Long questionId,
+            @RequestBody Map<String, Object> payload,
+            HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+        }
+
+        try {
+            return ResponseEntity.ok(Map.of(
+                    "message", "Question updated successfully",
+                    "question", questionService.updateManualQuestionForHr(
+                            questionId,
+                            toManualQuestionDraft(payload),
+                            hr.getId())));
+        } catch (RuntimeException ex) {
+            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/questions/manual/{questionId}")
+    public ResponseEntity<?> deleteManualQuestion(
+            @PathVariable Long questionId,
+            HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+        }
+
+        try {
+            questionService.deleteManualQuestionForHr(questionId, hr.getId());
+            return ResponseEntity.ok(Map.of("message", "Question deleted successfully"));
+        } catch (RuntimeException ex) {
+            return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        }
     }
 
     // ------------------ GET DISTINCT SECTIONS FOR SUBJECT ------------------
@@ -485,7 +597,7 @@ public class HrRestController {
         if (hr == null)
             return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
 
-        List<Question> questions = questionService.getQuestionsBySubject(subject);
+        List<Question> questions = questionService.getQuestionsBySubjectForHr(subject, hr.getId());
 
         Map<Integer, Map<String, Object>> sectionsMap = new HashMap<>();
 
@@ -629,6 +741,72 @@ public class HrRestController {
                 "results", assessmentResultService.getCandidateResults(candidateId)));
     }
 
+    // ------------------ VIEW CANDIDATE ANSWERS (HR) ------------------
+    @GetMapping("/candidates/{candidateId}/results/{resultId}/answers")
+    public ResponseEntity<?> getCandidateAnswersForHr(
+            @PathVariable Long candidateId,
+            @PathVariable Long resultId,
+            HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null)
+            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+
+        hr = refreshHr(hr, session);
+
+        if (!hrService.isAccessAllowed(hr)) {
+            return ResponseEntity.status(403).body(Map.of(
+                    "error", "Your free trial has expired. Please purchase a plan to continue.",
+                    "trialExpired", true));
+        }
+
+        // Verify candidate exists
+        Candidate candidate = candidateService.findById(candidateId).orElse(null);
+        if (candidate == null) {
+            return ResponseEntity.status(404).body(Map.of("error", "Candidate not found"));
+        }
+
+        // Get the result and verify it belongs to this candidate
+        List<AssessmentResult> results = assessmentResultService.getCandidateResults(candidateId);
+        Optional<AssessmentResult> resultOpt = results.stream()
+                .filter(r -> Objects.equals(r.getId(), resultId))
+                .findFirst();
+
+        if (resultOpt.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("error", "Result not found"));
+        }
+
+        AssessmentResult result = resultOpt.get();
+        try {
+            List<Map<String, Object>> answers = parseStoredAnswers(result.getAnswersJson());
+            return ResponseEntity.ok(Map.of(
+                    "candidateId", candidateId,
+                    "candidateName", candidate.getFullName(),
+                    "resultId", resultId,
+                    "subject", result.getSubject(),
+                    "level", result.getLevel(),
+                    "score", result.getScore(),
+                    "answers", answers));
+        } catch (Exception ex) {
+            return ResponseEntity.ok(Map.of(
+                    "candidateId", candidateId,
+                    "candidateName", candidate.getFullName(),
+                    "resultId", resultId,
+                    "subject", result.getSubject(),
+                    "level", result.getLevel(),
+                    "score", result.getScore(),
+                    "answers", List.of(),
+                    "error", "Could not parse answers"));
+        }
+    }
+
+    // Helper method to parse stored answers JSON
+    private List<Map<String, Object>> parseStoredAnswers(String answersJson) throws IOException {
+        if (answersJson == null || answersJson.isBlank()) {
+            return List.of();
+        }
+        return objectMapper.readValue(answersJson, new TypeReference<List<Map<String, Object>>>() {});
+    }
+
     // ------------------ LOGOUT ------------------
     @PostMapping("/logout")
     public ResponseEntity<?> logout(HttpSession session) {
@@ -645,7 +823,11 @@ public class HrRestController {
                 return ResponseEntity.status(403).build();
             }
 
-            Path filePath = uploadDir.resolve(filename).normalize();
+            String safeFileName = Paths.get(filename).getFileName().toString().trim();
+            Path filePath = uploadDir.resolve(safeFileName).normalize();
+            if (!filePath.startsWith(uploadDir)) {
+                return ResponseEntity.status(403).build();
+            }
             Resource resource = new UrlResource(filePath.toUri());
             if (!resource.exists())
                 return ResponseEntity.notFound().build();
@@ -674,7 +856,7 @@ public class HrRestController {
             return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
 
         try {
-            List<Map<String, Object>> tests = testAllocationService.getAvailableTests();
+            List<Map<String, Object>> tests = testAllocationService.getAvailableTests(hr.getId());
             return ResponseEntity.ok(Map.of("tests", tests));
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of("error", "Failed to fetch available tests"));
@@ -691,32 +873,77 @@ public class HrRestController {
             return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
 
         try {
-            // FIX: Add null checks before parsing
+            // DEBUG: Log the entire request body
+            logger.info("ASSIGN TEST API: Received request body: {}", request);
+            
             Object candidateIdObj = request.get("candidateId");
-            Object testNameObj = request.get("testName");
-            
-            if (candidateIdObj == null || testNameObj == null) {
-                return ResponseEntity.badRequest().body(Map.of("error", "candidateId and testName are required"));
-            }
-            
-            Long candidateId = Long.parseLong(candidateIdObj.toString());
-            String testName = testNameObj.toString();
+            Object testIdsObj = request.get("testIds");
+            Object testIdObj = request.get("testId");
+            Object availableFromObj = request.get("availableFrom");
 
-            // Prevent duplicate assignments
-            if (testAllocationService.getAssignedTestsForCandidate(candidateId).stream()
-                    .anyMatch(m -> m.getTestName().equalsIgnoreCase(testName))) {
-                return ResponseEntity.badRequest().body(Map.of("error", "Test already assigned to this candidate"));
+            // FIX: Add strict validation for candidateId
+            if (candidateIdObj == null) {
+                logger.error("ASSIGN TEST API: candidateId is null in request");
+                return ResponseEntity.badRequest().body(Map.of("error", "candidateId is required"));
             }
 
-            var mapping = testAllocationService.assignTestToCandidate(candidateId, testName, hr.getId());
+            Long candidateId;
+            try {
+                candidateId = Long.parseLong(candidateIdObj.toString());
+            } catch (NumberFormatException e) {
+                logger.error("ASSIGN TEST API: Invalid candidateId format: {}", candidateIdObj);
+                return ResponseEntity.badRequest().body(Map.of("error", "Invalid candidateId format"));
+            }
+
+            // FIX: Verify candidate exists before assigning
+            Candidate candidate = candidateService.findById(candidateId).orElse(null);
+            if (candidate == null) {
+                logger.error("ASSIGN TEST API: Candidate {} not found", candidateId);
+                return ResponseEntity.status(404).body(Map.of("error", "Candidate not found with id: " + candidateId));
+            }
+
+            logger.info("ASSIGN TEST API: HR {} assigning tests to candidate {} - {}", 
+                hr.getId(), candidateId, candidate.getFullName());
+
+            List<Long> testIds = new ArrayList<>();
+
+            if (testIdsObj instanceof List<?> rawList) {
+                for (Object value : rawList) {
+                    testIds.add(Long.parseLong(String.valueOf(value)));
+                }
+            } else if (testIdObj != null) {
+                testIds.add(Long.parseLong(testIdObj.toString()));
+            }
+
+            if (testIds.isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "At least one valid testId is required"));
+            }
+
+            LocalDateTime availableFrom = null;
+            if (availableFromObj != null) {
+                String raw = String.valueOf(availableFromObj).trim();
+                if (!raw.isBlank()) {
+                    availableFrom = LocalDateTime.parse(raw);
+                }
+            }
+
+            var mappings = testAllocationService.assignMultipleTestsToCandidate(candidateId, testIds, hr.getId(), availableFrom);
+            
+            logger.info("ASSIGN TEST API SUCCESS: HR {} assigned {} tests to candidate {}", 
+                hr.getId(), mappings.size(), candidateId);
+            
             return ResponseEntity.ok(Map.of(
-                    "message", "Test assigned successfully",
-                    "testName", testName,
+                    "message", "Test assigned successfully to " + candidate.getFullName(),
                     "candidateId", candidateId,
-                    "mappingId", mapping.getId()));
+                    "candidateName", candidate.getFullName(),
+                    "assignedCount", mappings.size(),
+                    "availableFrom", availableFrom,
+                    "assignments", mappings));
         } catch (RuntimeException e) {
+            logger.error("ASSIGN TEST API ERROR: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
+            logger.error("ASSIGN TEST API EXCEPTION: {}", e.getMessage(), e);
             return ResponseEntity.status(500).body(Map.of("error", "Failed to assign test: " + e.getMessage()));
         }
     }
@@ -748,14 +975,16 @@ public class HrRestController {
             return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
 
         try {
-            // FIX: Add null check before parsing
             Object candidateIdObj = request.get("candidateId");
             if (candidateIdObj == null) {
                 return ResponseEntity.badRequest().body(Map.of("error", "candidateId is required"));
             }
-            
+
             Long candidateId = Long.parseLong(candidateIdObj.toString());
-            String feedback = request.getOrDefault("feedback", "Approved").toString();
+            String feedback = String.valueOf(request.getOrDefault("feedback", "")).trim();
+            if (feedback.isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Feedback is mandatory"));
+            }
 
             var approved = hiringWorkflowService.approveCandidate(candidateId, feedback);
             return ResponseEntity.ok(Map.of(
@@ -778,14 +1007,16 @@ public class HrRestController {
             return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
 
         try {
-            // FIX: Add null check before parsing
             Object candidateIdObj = request.get("candidateId");
             if (candidateIdObj == null) {
                 return ResponseEntity.badRequest().body(Map.of("error", "candidateId is required"));
             }
-            
+
             Long candidateId = Long.parseLong(candidateIdObj.toString());
-            String feedback = request.getOrDefault("feedback", "Rejected").toString();
+            String feedback = String.valueOf(request.getOrDefault("feedback", "")).trim();
+            if (feedback.isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Feedback is mandatory"));
+            }
 
             var rejected = hiringWorkflowService.rejectCandidate(candidateId, feedback);
             return ResponseEntity.ok(Map.of(
@@ -828,6 +1059,62 @@ public class HrRestController {
         }
     }
 
+    @GetMapping("/candidates/{candidateId}/submissions")
+    public ResponseEntity<?> getCandidateSubmissions(@PathVariable Long candidateId, HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null)
+            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+
+        try {
+            return ResponseEntity.ok(Map.of(
+                    "candidateId", candidateId,
+                    "submissions", hiringWorkflowService.getSubmissionsForCandidate(candidateId)));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", "Failed to fetch candidate submissions"));
+        }
+    }
+
+    @GetMapping("/candidates/{candidateId}/review-data")
+    public ResponseEntity<?> getCandidateReviewData(@PathVariable Long candidateId, HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+        }
+
+        try {
+            Candidate candidate = candidateService.findById(candidateId).orElse(null);
+            if (candidate == null) {
+                return ResponseEntity.status(404).body(Map.of("error", "Candidate not found"));
+            }
+
+            List<Map<String, Object>> reviews = hiringWorkflowService.getAssignedTestsForCandidate(candidateId).stream()
+                    .map(mapping -> buildReviewPayload(candidateId, mapping))
+                    .toList();
+
+            return ResponseEntity.ok(Map.of(
+                    "candidateId", candidateId,
+                    "candidateName", candidate.getFullName() != null ? candidate.getFullName() : "",
+                    "reviews", reviews));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", "Failed to fetch candidate review data"));
+        }
+    }
+
+    @GetMapping("/feedback-history")
+    public ResponseEntity<?> getFeedbackHistory(HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null)
+            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+
+        try {
+            return ResponseEntity.ok(Map.of(
+                    "candidates", hiringWorkflowService.getAllApprovedRejectedCandidates(),
+                    "assignments", testAllocationService.getTestAssignmentReport()));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", "Failed to fetch feedback history"));
+        }
+    }
+
     // ------------------ PRIVATE HELPERS ------------------
 
     private Hr refreshHr(Hr hr, HttpSession session) {
@@ -852,5 +1139,264 @@ public class HrRestController {
         summary.put("experience", candidate.getExperience() != null ? candidate.getExperience() : 0);
         summary.put("hasAccess", hasAccess);
         return summary;
+    }
+
+    @SuppressWarnings("unchecked")
+    private QuestionService.ManualQuestionDraft toManualQuestionDraft(Map<String, Object> payload) {
+        String subject = String.valueOf(payload.getOrDefault("subject", "")).trim();
+        String questionType = String.valueOf(payload.getOrDefault("questionType", "MCQ")).trim();
+        String questionText = String.valueOf(payload.getOrDefault("questionText", ""));
+        String correctAnswer = String.valueOf(payload.getOrDefault("correctAnswer", ""));
+        String codingDescription = String.valueOf(payload.getOrDefault("codingDescription", ""));
+
+        List<String> options = payload.get("options") instanceof List<?> rawOptions
+                ? rawOptions.stream()
+                    .map(item -> item == null ? "" : String.valueOf(item))
+                    .toList()
+                : List.of();
+
+        List<QuestionService.ManualTestCaseDraft> testCases = payload.get("testCases") instanceof List<?> rawCases
+                ? rawCases.stream()
+                    .filter(Map.class::isInstance)
+                    .map(Map.class::cast)
+                    .map(testCase -> new QuestionService.ManualTestCaseDraft(
+                            String.valueOf(testCase.getOrDefault("input", "")),
+                            String.valueOf(testCase.getOrDefault("expectedOutput", ""))))
+                    .toList()
+                : List.of();
+
+        return new QuestionService.ManualQuestionDraft(
+                subject,
+                questionType,
+                questionText,
+                options,
+                correctAnswer,
+                codingDescription,
+                testCases);
+    }
+
+    private Map<String, Object> buildReviewPayload(Long candidateId, com.virtuehire.model.CandidateTestMapping mapping) {
+        List<com.virtuehire.model.AssessmentResult> results = assessmentResultService
+                .getCandidateResults(candidateId, mapping.getTestName()).stream()
+                .sorted(Comparator.comparingInt(com.virtuehire.model.AssessmentResult::getLevel)
+                        .thenComparing(com.virtuehire.model.AssessmentResult::getAttemptedAt,
+                                Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+
+        Optional<Assessment> assessmentOpt = assessmentService.getAssessmentByName(mapping.getTestName());
+        int totalSections = assessmentOpt
+                .map(assessment -> assessmentService.getAssessmentSections(assessment.getId()).size())
+                .orElse(0);
+
+        var submission = hiringWorkflowService.getSubmissionForCandidateTest(candidateId, mapping.getTestId()).orElse(null);
+
+        List<Map<String, Object>> resultSummaries = results.stream()
+                .map(result -> {
+                    Map<String, Object> data = new LinkedHashMap<>();
+                    data.put("resultId", result.getId());
+                    data.put("subject", result.getSubject());
+                    data.put("level", result.getLevel());
+                    data.put("score", result.getScore());
+                    data.put("attemptedAt", result.getAttemptedAt());
+                    data.put("lockedAt", result.getLockedAt());
+                    data.put("answers", parseAnswers(result.getAnswersJson()));
+                    return data;
+                })
+                .toList();
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("mappingId", mapping.getId());
+        payload.put("testId", mapping.getTestId());
+        payload.put("testName", mapping.getTestName());
+        payload.put("testDescription", mapping.getTestDescription());
+        payload.put("assignedAt", mapping.getAssignedAt());
+        payload.put("submitted", Boolean.TRUE.equals(mapping.getSubmitted()));
+        payload.put("submittedAt", mapping.getSubmittedAt());
+        payload.put("scoreObtained", mapping.getScoreObtained());
+        payload.put("durationMinutes", mapping.getDurationMinutes());
+        payload.put("completedSections", resultSummaries.size());
+        payload.put("totalSections", totalSections);
+        payload.put("results", resultSummaries);
+        payload.put("submission", submission);
+        payload.put("canReview", Boolean.TRUE.equals(mapping.getSubmitted()) || !resultSummaries.isEmpty());
+        return payload;
+    }
+
+    private List<Map<String, Object>> parseAnswers(String answersJson) {
+        if (answersJson == null || answersJson.isBlank()) {
+            return List.of();
+        }
+
+        try {
+            return objectMapper.readValue(answersJson, new TypeReference<List<Map<String, Object>>>() {});
+        } catch (Exception ex) {
+            return List.of();
+        }
+    }
+
+    private ResponseEntity<Resource> serveStoredFile(String storedFileName, String disposition) throws IOException {
+        String normalizedStoredFileName = extractFileName(storedFileName);
+        if (normalizedStoredFileName.isBlank()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        Path path = resolveStoredFilePath(normalizedStoredFileName);
+        if (path == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        Path alternateDir = getAlternateUploadDir();
+        boolean inUploadDir = path.startsWith(uploadDir);
+        boolean inAlternateDir = alternateDir != null && path.startsWith(alternateDir);
+
+        if (!inUploadDir && !inAlternateDir) {
+            logger.warn("HR file path outside allowed directories: {}", path);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
+        Resource resource = new UrlResource(path.toUri());
+        if (!Files.exists(path) || !resource.isReadable()) {
+            logger.warn("HR file not found or unreadable: {}", path);
+            return ResponseEntity.notFound().build();
+        }
+
+        String contentType = Files.probeContentType(path);
+        if (contentType == null || contentType.isBlank()) {
+            contentType = "application/octet-stream";
+        }
+
+        String safeDisposition = "attachment".equalsIgnoreCase(disposition) ? "attachment" : "inline";
+        String downloadName = getOriginalFileName(normalizedStoredFileName);
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(contentType))
+                .header(HttpHeaders.CONTENT_DISPOSITION, safeDisposition + "; filename=\"" + downloadName + "\"")
+                .body(resource);
+    }
+
+    private Path resolveStoredFilePath(String storedFileName) {
+        Path primaryPath = uploadDir.resolve(storedFileName).normalize();
+        if (Files.exists(primaryPath) && Files.isReadable(primaryPath)) {
+            return primaryPath;
+        }
+
+        Path alternateUploadDir = getAlternateUploadDir();
+        if (alternateUploadDir != null) {
+            Path alternatePath = alternateUploadDir.resolve(storedFileName).normalize();
+            if (Files.exists(alternatePath) && Files.isReadable(alternatePath)) {
+                return alternatePath;
+            }
+        }
+
+        Path fuzzyMatch = findMatchingStoredFile(storedFileName);
+        return fuzzyMatch != null ? fuzzyMatch : primaryPath;
+    }
+
+    private Path findMatchingStoredFile(String storedFileName) {
+        String normalizedRequestedName = extractFileName(storedFileName);
+        String requestedOriginalName = getOriginalFileName(normalizedRequestedName);
+
+        List<Path> candidateDirs = new ArrayList<>();
+        candidateDirs.add(uploadDir);
+        Path alternateUploadDir = getAlternateUploadDir();
+        if (alternateUploadDir != null && !alternateUploadDir.equals(uploadDir)) {
+            candidateDirs.add(alternateUploadDir);
+        }
+
+        for (Path dir : candidateDirs) {
+            if (dir == null || !Files.isDirectory(dir)) {
+                continue;
+            }
+
+            try (var stream = Files.list(dir)) {
+                Optional<Path> exactOriginalNameMatch = stream
+                        .filter(Files::isRegularFile)
+                        .filter(path -> {
+                            String candidateName = extractFileName(path.getFileName().toString());
+                            String candidateOriginalName = getOriginalFileName(candidateName);
+                            return candidateName.equalsIgnoreCase(normalizedRequestedName)
+                                    || candidateOriginalName.equalsIgnoreCase(normalizedRequestedName)
+                                    || candidateOriginalName.equalsIgnoreCase(requestedOriginalName);
+                        })
+                        .findFirst();
+
+                if (exactOriginalNameMatch.isPresent()) {
+                    return exactOriginalNameMatch.get().normalize();
+                }
+            } catch (IOException ignored) {
+            }
+        }
+
+        return null;
+    }
+
+    private Path getAlternateUploadDir() {
+        Path current = uploadDir.toAbsolutePath().normalize();
+        Path parent = current.getParent();
+        if (parent == null) {
+            return null;
+        }
+
+        Path currentName = current.getFileName();
+        Path parentName = parent.getFileName();
+
+        if (currentName != null && "uploads".equalsIgnoreCase(currentName.toString())
+                && parentName != null && "Backend".equalsIgnoreCase(parentName.toString())
+                && parent.getParent() != null) {
+            Path siblingUploads = parent.getParent().resolve("uploads").normalize();
+            if (Files.exists(siblingUploads)) {
+                return siblingUploads;
+            }
+        }
+
+        return null;
+    }
+
+    private String extractFileName(String fileName) {
+        if (fileName == null) {
+            return "";
+        }
+        return Paths.get(fileName).getFileName().toString().trim();
+    }
+
+    private String getOriginalFileName(String storedFileName) {
+        String safeFileName = extractFileName(storedFileName);
+        int separatorIndex = safeFileName.indexOf('_');
+        if (separatorIndex > -1 && separatorIndex < safeFileName.length() - 1) {
+            return safeFileName.substring(separatorIndex + 1);
+        }
+        return safeFileName;
+    }
+
+    // ------------------ CANDIDATE CUMULATIVE RESULTS (BADGES/EXPERT STATUS) ------------------
+    // FIX: Added endpoint so HR can see candidate Expert badges with verified indicator
+    @GetMapping("/candidates/{candidateId}/cumulative-results")
+    public ResponseEntity<?> getCandidateCumulativeResults(@PathVariable Long candidateId, HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+        }
+
+        hr = refreshHr(hr, session);
+        Candidate candidate = candidateService.findById(candidateId).orElse(null);
+        if (candidate == null) {
+            return ResponseEntity.status(404).body(Map.of("error", "Candidate not found"));
+        }
+
+        // Check access permissions
+        if (!hrService.isAccessAllowed(hr)) {
+            return ResponseEntity.status(403).body(Map.of(
+                    "error", "Your free trial has expired. Please purchase a plan to continue.",
+                    "trialExpired", true));
+        }
+
+        // Get cumulative results with badge info (e.g., "Java1 Expert")
+        List<Map<String, Object>> cumulativeResults = assessmentResultService.getCandidateCumulativeResults(candidateId);
+
+        return ResponseEntity.ok(Map.of(
+                "candidateId", candidateId,
+                "candidateName", candidate.getFullName(),
+                "cumulativeResults", cumulativeResults,
+                "currentBadge", candidate.getBadge()));
     }
 }

@@ -34,3 +34,10 @@ export async function fetchResumePdfBlob(resumeId, disposition = "inline") {
   );
   return response.data; // Blob
 }
+
+export async function generateRegistrationResumePdf(payload) {
+  const response = await api.post("/candidates/resumes/draft/pdf", payload, {
+    responseType: "blob",
+  });
+  return response.data;
+}

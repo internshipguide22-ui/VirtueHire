@@ -207,6 +207,20 @@ const TestManager = ({ hr, onSuccess, apiBase = "/hrs" }) => {
   const removeToast = (id) =>
     setToasts((prev) => prev.filter((t) => t.id !== id));
 
+  const getApiErrorMessage = (err, fallback) => {
+    const data = err?.response?.data;
+    if (typeof data === "string" && data.trim()) {
+      return data;
+    }
+    if (data?.error) {
+      return data.error;
+    }
+    if (data?.message) {
+      return data.message;
+    }
+    return fallback;
+  };
+
   /* ---------- shared state ---------- */
   const [allSubjectsInfo, setAllSubjectsInfo] = useState([]);
 
@@ -749,7 +763,7 @@ const TestManager = ({ hr, onSuccess, apiBase = "/hrs" }) => {
       setChosenSections([{ ...DEFAULT_SECTION }]);
     } catch (err) {
       addToast(
-        err.response?.data?.error || "Failed to save assessment.",
+        getApiErrorMessage(err, "Failed to save assessment."),
         "error",
       );
     } finally {
@@ -773,6 +787,11 @@ const TestManager = ({ hr, onSuccess, apiBase = "/hrs" }) => {
           Upload questions to the Question Bank and create assessments for
           candidates.
         </p>
+        {apiBase === "/hrs" ? (
+          <p className="tm-page-sub">
+            HR question bank access includes Admin shared questions plus your own uploaded questions.
+          </p>
+        ) : null}
       </div>
 
       {/* ════════════════════════════════════════════════════

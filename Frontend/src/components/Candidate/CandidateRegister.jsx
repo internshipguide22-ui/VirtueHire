@@ -11,9 +11,11 @@ import {
   GraduationCap,
   Briefcase,
   Code,
+  FilePlus2,
   Upload,
 } from "lucide-react";
 import api from "../../services/api";
+import RegistrationResumeBuilder from "./resume/RegistrationResumeBuilder";
 import "./CandidateRegister.css";
 
 export default function CandidateRegister() {
@@ -38,6 +40,7 @@ export default function CandidateRegister() {
 
   const [resumeFile, setResumeFile] = useState(null);
   const [profilePicFile, setProfilePicFile] = useState(null);
+  const [resumeBuilderOpen, setResumeBuilderOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -342,11 +345,24 @@ export default function CandidateRegister() {
                   <label>
                     <Upload size={14} /> Resume
                   </label>
+                  <div className="vh-resume-choice-row">
+                    <button
+                      type="button"
+                      className="vh-create-resume-btn"
+                      onClick={() => setResumeBuilderOpen(true)}
+                    >
+                      <FilePlus2 size={14} />
+                      Create Resume
+                    </button>
+                  </div>
                   <input
                     type="file"
                     accept=".pdf,.doc,.docx"
                     onChange={(e) => setResumeFile(e.target.files[0])}
                   />
+                  {resumeFile ? (
+                    <p className="vh-selected-file">{resumeFile.name}</p>
+                  ) : null}
                 </div>
                 <div className="vh-file-group">
                   <label>
@@ -375,6 +391,17 @@ export default function CandidateRegister() {
           </div>
         </form>
       </div>
+      {resumeBuilderOpen ? (
+        <RegistrationResumeBuilder
+          candidateForm={form}
+          onClose={() => setResumeBuilderOpen(false)}
+          onResumeReady={(file) => {
+            setResumeFile(file);
+            setMessage("Resume created and attached. Complete registration to upload it.");
+            setError("");
+          }}
+        />
+      ) : null}
     </div>
   );
 }

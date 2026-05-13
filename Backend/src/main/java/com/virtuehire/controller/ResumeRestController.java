@@ -27,6 +27,17 @@ public class ResumeRestController {
         this.resumeService = resumeService;
     }
 
+    @PostMapping(value = "/draft/pdf", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<byte[]> generateDraftPdf(@RequestBody Map<String, Object> payload) throws IOException {
+        byte[] pdfBytes = resumeService.generateStandaloneResumePdf(payload);
+        String fileName = sanitizeDownloadName(String.valueOf(payload.getOrDefault("title", "resume"))) + ".pdf";
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileName + "\"")
+                .body(pdfBytes);
+    }
+
     @GetMapping
     public ResponseEntity<?> listResumes(HttpSession session) {
         Candidate candidate = getSessionCandidate(session);
@@ -138,5 +149,12 @@ public class ResumeRestController {
 
     private Candidate getSessionCandidate(HttpSession session) {
         return (Candidate) session.getAttribute("candidate");
+    }
+
+    private String sanitizeDownloadName(String value) {
+        String cleaned = value == null ? "resume" : value.toLowerCase()
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("(^-|-$)", "");
+        return cleaned.isBlank() ? "resume" : cleaned;
     }
 }

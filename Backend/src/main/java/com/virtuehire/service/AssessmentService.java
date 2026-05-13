@@ -32,6 +32,7 @@ public class AssessmentService {
     private final AssessmentSectionRepository sectionRepo;
     private final AssessmentQuestionRepository aqRepo;
     private final QuestionRepository questionRepo;
+    private final QuestionService questionService;
     private final AssessmentResultRepository resultRepo;
     private final AdminNotificationService adminNotificationService;
 
@@ -39,24 +40,31 @@ public class AssessmentService {
                              AssessmentSectionRepository sectionRepo,
                              AssessmentQuestionRepository aqRepo,
                              QuestionRepository questionRepo,
+                             QuestionService questionService,
                              AssessmentResultRepository resultRepo,
                              AdminNotificationService adminNotificationService) {
         this.assessmentRepo = assessmentRepo;
         this.sectionRepo = sectionRepo;
         this.aqRepo = aqRepo;
         this.questionRepo = questionRepo;
+        this.questionService = questionService;
         this.resultRepo = resultRepo;
         this.adminNotificationService = adminNotificationService;
     }
 
     @Transactional
     public Assessment createAssessment(String name, String description, List<Map<String, Object>> sectionsData) {
+        return createAssessment(name, description, sectionsData, null);
+    }
+
+    @Transactional
+    public Assessment createAssessment(String name, String description, List<Map<String, Object>> sectionsData, Long hrId) {
         // Validation step
         for (Map<String, Object> sec : sectionsData) {
-            String subject = normalizeSkill((String) sec.get("subject"));
-            int requestedCount = (Integer) sec.get("questionCount");
-            String sectionMode = normalizeSectionMode((String) sec.get("sectionMode"));
-            List<Question> availableQuestions = getQuestionsForMode(subject, sectionMode);
+            String subject = normalizeSkill(asString(sec.get("subject")), hrId);
+            int requestedCount = asPositiveInt(sec.get("questionCount"), "Question count");
+            String sectionMode = normalizeSectionMode(asString(sec.get("sectionMode")));
+            List<Question> availableQuestions = getQuestionsForMode(subject, sectionMode, hrId);
 
             long availableCount = availableQuestions.size();
             if (availableCount < requestedCount) {
@@ -79,11 +87,11 @@ public class AssessmentService {
         // 2. Iterate sections, save sections, assign random questions
         int sectionNumber = 1;
         for (Map<String, Object> sec : sectionsData) {
-            String subject = normalizeSkill((String) sec.get("subject"));
-            int requestedCount = (Integer) sec.get("questionCount");
-            int timeLimit = (Integer) sec.get("timeLimit");
-            int passPercentage = (Integer) sec.get("passPercentage");
-            String sectionMode = normalizeSectionMode((String) sec.get("sectionMode"));
+            String subject = normalizeSkill(asString(sec.get("subject")), hrId);
+            int requestedCount = asPositiveInt(sec.get("questionCount"), "Question count");
+            int timeLimit = asPositiveInt(sec.get("timeLimit"), "Time limit");
+            int passPercentage = asPercentage(sec.get("passPercentage"));
+            String sectionMode = normalizeSectionMode(asString(sec.get("sectionMode")));
             String supportedLanguages = String.join(",", toStringList(sec.get("supportedLanguages")));
 
             AssessmentSection section = new AssessmentSection(
@@ -98,7 +106,7 @@ public class AssessmentService {
             section = sectionRepo.save(section);
 
             // Fetch and shuffle questions
-            List<Question> availableQs = getQuestionsForMode(subject, sectionMode);
+            List<Question> availableQs = getQuestionsForMode(subject, sectionMode, hrId);
             Collections.shuffle(availableQs);
 
             List<Question> selectedQs = availableQs.subList(0, requestedCount);
@@ -110,8 +118,12 @@ public class AssessmentService {
             aqRepo.saveAll(aqs);
         }
 
-        adminNotificationService.resolveCombinedAssessmentNotification(
-                buildSkillSignatureFromSections(getAssessmentSections(assessment.getId())));
+        try {
+            adminNotificationService.resolveCombinedAssessmentNotification(
+                    buildSkillSignatureFromSections(getAssessmentSections(assessment.getId()), hrId));
+        } catch (RuntimeException ex) {
+            System.out.println("Assessment created, but notification cleanup failed: " + ex.getMessage());
+        }
 
         return assessment;
     }
@@ -179,7 +191,7 @@ public class AssessmentService {
         // Find ALL matching assessments, not just the first one
         List<Assessment> matchedAssessments = new ArrayList<>();
         for (Assessment assessment : assessmentRepo.findAll()) {
-            String assessmentSignature = buildSkillSignatureFromSections(getAssessmentSections(assessment.getId()));
+            String assessmentSignature = buildSkillSignatureFromSections(getAssessmentSections(assessment.getId()), null);
             if (requestedSignature.equals(assessmentSignature)) {
                 matchedAssessments.add(assessment);
             }
@@ -243,7 +255,7 @@ public class AssessmentService {
         for (AssessmentSection section : sections) {
             String subject = section.getSubject();
             if (subject != null && !subject.isBlank()) {
-                String normalized = normalizeSkill(subject);
+                String normalized = normalizeSkill(subject, null);
                 if (!normalized.isBlank()) {
                     uniqueSubjects.add(normalized);
                 }
@@ -315,31 +327,34 @@ public class AssessmentService {
 
         return skills.stream()
                 .filter(skill -> skill != null && !skill.isBlank())
-                .map(this::normalizeSkill)
+                .map(skill -> normalizeSkill(skill, null))
                 .map(skill -> skill.toLowerCase(Locale.ROOT))
                 .distinct()
                 .sorted()
                 .collect(Collectors.joining("|"));
     }
 
-    private String buildSkillSignatureFromSections(List<AssessmentSection> sections) {
+    private String buildSkillSignatureFromSections(List<AssessmentSection> sections, Long hrId) {
         Set<String> skills = sections.stream()
                 .map(AssessmentSection::getSubject)
                 .filter(subject -> subject != null && !subject.isBlank())
-                .map(this::normalizeSkill)
+                .map(subject -> normalizeSkill(subject, hrId))
                 .collect(Collectors.toCollection(LinkedHashSet::new));
 
         return buildSkillSignature(new ArrayList<>(skills));
     }
 
-    private String normalizeSkill(String skill) {
+    private String normalizeSkill(String skill, Long hrId) {
         if (skill == null) {
             return "";
         }
 
         String trimmed = skill.trim();
-        return questionRepo.findAll().stream()
-                .map(Question::getSubject)
+        List<String> visibleSubjects = hrId == null
+                ? questionService.getAllSubjects()
+                : questionService.getAllSubjectsForHr(hrId);
+
+        return visibleSubjects.stream()
                 .filter(subject -> subject != null
                         && canonicalizeSkill(subject).equals(canonicalizeSkill(trimmed)))
                 .findFirst()
@@ -367,7 +382,7 @@ public class AssessmentService {
     }
 
     private String buildSkillMatchKey(String skill) {
-        String canonical = canonicalizeSkill(normalizeSkill(skill));
+        String canonical = canonicalizeSkill(normalizeSkill(skill, null));
         if (canonical.isBlank()) {
             return "";
         }
@@ -387,11 +402,14 @@ public class AssessmentService {
         };
     }
 
-    private List<Question> getQuestionsForMode(String subject, String sectionMode) {
+    private List<Question> getQuestionsForMode(String subject, String sectionMode, Long hrId) {
+        List<Question> questions = hrId == null
+                ? questionService.getQuestionsBySubject(subject)
+                : questionService.getQuestionsBySubjectForHr(subject, hrId);
         if ("COMPILER".equals(sectionMode)) {
-            return questionRepo.findBySubjectAndHasCompiler(subject, true);
+            return questions.stream().filter(Question::isHasCompiler).toList();
         }
-        return questionRepo.findBySubjectAndHasCompiler(subject, false);
+        return questions.stream().filter(question -> !question.isHasCompiler()).toList();
     }
 
     private String normalizeSectionMode(String sectionMode) {
@@ -399,6 +417,40 @@ public class AssessmentService {
             return "NO_COMPILER";
         }
         return "COMPILER".equalsIgnoreCase(sectionMode.trim()) ? "COMPILER" : "NO_COMPILER";
+    }
+
+    private String asString(Object rawValue) {
+        return rawValue == null ? "" : rawValue.toString().trim();
+    }
+
+    private int asPositiveInt(Object rawValue, String label) {
+        int value = asInt(rawValue, label);
+        if (value < 1) {
+            throw new RuntimeException(label + " must be at least 1.");
+        }
+        return value;
+    }
+
+    private int asPercentage(Object rawValue) {
+        int value = asInt(rawValue, "Pass percentage");
+        if (value < 1 || value > 100) {
+            throw new RuntimeException("Pass percentage must be between 1 and 100.");
+        }
+        return value;
+    }
+
+    private int asInt(Object rawValue, String label) {
+        if (rawValue instanceof Number number) {
+            return number.intValue();
+        }
+        if (rawValue instanceof String text && !text.isBlank()) {
+            try {
+                return Integer.parseInt(text.trim());
+            } catch (NumberFormatException ex) {
+                throw new RuntimeException(label + " must be a valid number.");
+            }
+        }
+        throw new RuntimeException(label + " is required.");
     }
 
     private String formatModeLabel(String sectionMode) {

@@ -30,6 +30,7 @@ public class WebConfig implements WebMvcConfigurer {
                         "/api/candidates/resend-otp",
                         "/api/candidates/forgot-password",
                         "/api/candidates/reset-password",
+                        "/api/candidates/resumes/draft/pdf",
                         "/api/candidates/file/**");
     }
 
