@@ -18,6 +18,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import com.virtuehire.model.CandidateTestMapping;
+
 @RestController
 @RequestMapping("/api/assessment")
 @CrossOrigin(origins = { "https://admin.virtuehire.in", "https://virtuehire.in", "http://localhost:3000" },
@@ -314,12 +316,28 @@ public class AssessmentRestController {
     }
 
     // =========================================================
-    // SUBJECTS (Available Assessments)
+    // SUBJECTS (Assessments assigned to the logged-in candidate only)
     // =========================================================
 
     @GetMapping("/subjects")
-    public List<String> getConfiguredSubjects() {
-        return assessmentService.getAllAssessmentNames();
+    public ResponseEntity<?> getConfiguredSubjects(HttpSession session) {
+
+        Candidate candidate = (Candidate) session.getAttribute("candidate");
+
+        if (candidate == null) {
+            return ResponseEntity.status(401)
+                    .body(Map.of("error", "Not logged in"));
+        }
+
+        List<CandidateTestMapping> mappings =
+                testAllocationService.getAssignedTestsForCandidate(candidate.getId());
+
+        List<String> subjects = mappings.stream()
+                .map(CandidateTestMapping::getTestName)
+                .distinct()
+                .toList();
+
+        return ResponseEntity.ok(subjects);
     }
 
     @GetMapping("/results/{resultId}/answers")

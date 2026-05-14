@@ -105,8 +105,10 @@ public class AssessmentService {
                     supportedLanguages);
             section = sectionRepo.save(section);
 
-            // Fetch and shuffle questions
-            List<Question> availableQs = getQuestionsForMode(subject, sectionMode, hrId);
+            // Fetch and shuffle questions — wrap in ArrayList to allow mutation
+            List<Question> availableQs = new ArrayList<>(
+                    getQuestionsForMode(subject, sectionMode, hrId)
+            );
             Collections.shuffle(availableQs);
 
             List<Question> selectedQs = availableQs.subList(0, requestedCount);
@@ -176,10 +178,13 @@ public class AssessmentService {
     // Removed .distinct() so assessments with the same name are all returned.
     // Each assessment is identified by its ID, not its name; deduplication here
     // was silently hiding valid assessments from callers.
+    // Wrapped in ArrayList to return a mutable list.
     public List<String> getAllAssessmentNames() {
-        return assessmentRepo.findAll().stream()
-                .map(Assessment::getAssessmentName)
-                .toList();
+        return new ArrayList<>(
+                assessmentRepo.findAll().stream()
+                        .map(Assessment::getAssessmentName)
+                        .toList()
+        );
     }
 
     public Optional<Assessment> findAssessmentBySkillSet(List<String> skills) {
@@ -196,7 +201,7 @@ public class AssessmentService {
                 matchedAssessments.add(assessment);
             }
         }
-        
+
         // Sort by creation date (newest first) and return the first one
         matchedAssessments.sort(Comparator.comparing(Assessment::getCreatedAt).reversed());
         return matchedAssessments.isEmpty() ? Optional.empty() : Optional.of(matchedAssessments.get(0));
@@ -220,24 +225,54 @@ public class AssessmentService {
 
         // Get all assessments and filter those matching candidate skills
         List<Assessment> allAssessments = assessmentRepo.findAll();
-        
+
         List<Assessment> matchedAssessments = new ArrayList<>();
         for (Assessment assessment : allAssessments) {
+            if (!isAutoAssignableAssessment(assessment)) {
+                continue;
+            }
+
             List<String> assessmentSkills = getAssessmentSubjects(assessment);
-            
+
             // Check if any assessment skill matches any candidate skill
             boolean hasMatch = assessmentSkills.stream()
                     .anyMatch(assessmentSkill -> matchesCandidateSkill(candidateSkills, assessmentSkill));
-            
+
             if (hasMatch) {
                 matchedAssessments.add(assessment);
             }
         }
-        
+
         // Sort by creation date (newest first) after collecting all matches
         matchedAssessments.sort(Comparator.comparing(Assessment::getCreatedAt).reversed());
-        
+
         return matchedAssessments;
+    }
+
+    public boolean isAutoAssignableAssessmentName(String assessmentName) {
+        if (assessmentName == null || assessmentName.isBlank()) {
+            return false;
+        }
+
+        return getAssessmentByName(assessmentName)
+                .map(this::isAutoAssignableAssessment)
+                .orElse(false);
+    }
+
+    private boolean isAutoAssignableAssessment(Assessment assessment) {
+        if (assessment == null || assessment.getId() == null) {
+            return false;
+        }
+
+        List<AssessmentQuestion> assessmentQuestions = aqRepo.findByAssessmentId(assessment.getId());
+        if (assessmentQuestions == null || assessmentQuestions.isEmpty()) {
+            return false;
+        }
+
+        return assessmentQuestions.stream()
+                .map(AssessmentQuestion::getQuestion)
+                .filter(Objects::nonNull)
+                .noneMatch(question -> "HR".equalsIgnoreCase(question.getCreatedByRole()));
     }
 
     public List<String> getAssessmentSubjects(Assessment assessment) {
@@ -261,7 +296,7 @@ public class AssessmentService {
                 }
             }
         }
-        
+
         return new ArrayList<>(uniqueSubjects);
     }
 
@@ -402,14 +437,27 @@ public class AssessmentService {
         };
     }
 
+    // CHANGE 1: Wrap filtered results in new ArrayList to ensure mutability.
+    // .toList() in Java 16+ returns an immutable list, which caused
+    // UnsupportedOperationException when Collections.shuffle() was called on it.
     private List<Question> getQuestionsForMode(String subject, String sectionMode, Long hrId) {
         List<Question> questions = hrId == null
                 ? questionService.getQuestionsBySubject(subject)
                 : questionService.getQuestionsBySubjectForHr(subject, hrId);
+
         if ("COMPILER".equals(sectionMode)) {
-            return questions.stream().filter(Question::isHasCompiler).toList();
+            return new ArrayList<>(
+                    questions.stream()
+                            .filter(Question::isHasCompiler)
+                            .toList()
+            );
         }
-        return questions.stream().filter(question -> !question.isHasCompiler()).toList();
+
+        return new ArrayList<>(
+                questions.stream()
+                        .filter(question -> !question.isHasCompiler())
+                        .toList()
+        );
     }
 
     private String normalizeSectionMode(String sectionMode) {

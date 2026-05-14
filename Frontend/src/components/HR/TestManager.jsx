@@ -312,6 +312,12 @@ const TestManager = ({ hr, onSuccess, apiBase = "/hrs" }) => {
 
   const validateCSV = (content) => {
     return new Promise((resolve, reject) => {
+      const normalizeHeader = (header) =>
+        String(header || "")
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, "");
+
       Papa.parse(content, {
         header: true,
         skipEmptyLines: "greedy",
@@ -330,211 +336,29 @@ const TestManager = ({ hr, onSuccess, apiBase = "/hrs" }) => {
 
           const rawHeaders = Object.keys(rows[0] || {});
           const normalizedHeaders = rawHeaders.reduce((acc, header) => {
-            acc[header.trim().toLowerCase().replace(/\s+/g, "")] = header;
+            acc[normalizeHeader(header)] = header;
             return acc;
           }, {});
 
-          const hasAnyHeader = (...keys) =>
-            keys.some((key) => normalizedHeaders[key]);
-
-          const subjectFormatMissing = [
-            "subject",
-            "text",
-            "option1",
-            "option2",
-            "option3",
-            "option4",
-            "correctanswer",
-          ].filter((key) => !normalizedHeaders[key]);
-
-          const questionFormatMissing = [
-            "question",
-            "option_a",
-            "option_b",
-            "option_c",
-            "option_d",
-            "correct_answer",
-          ].filter((key) => !normalizedHeaders[key]);
-
-          const hasModernFormat = subjectFormatMissing.length === 0;
-          const hasLegacyFormat = questionFormatMissing.length === 0;
-          const hasMixedFormat = [
-            hasAnyHeader("type"),
-            hasAnyHeader("question"),
-            hasAnyHeader("option1"),
-            hasAnyHeader("option2"),
-            hasAnyHeader("option3"),
-            hasAnyHeader("option4"),
-            hasAnyHeader("correctan", "correctanswer", "correctanswers"),
-            hasAnyHeader("hascompi", "hascompiler"),
-            hasAnyHeader("description"),
-            hasAnyHeader("input1"),
-            hasAnyHeader("output1"),
-            hasAnyHeader("input2"),
-            hasAnyHeader("output2"),
-          ].every(Boolean);
-
-          if (!hasModernFormat && !hasLegacyFormat && !hasMixedFormat) {
-            reject(
-              `Missing columns for subject format: ${subjectFormatMissing.join(", ") || "none"}. ` +
-                `Missing columns for question format: ${questionFormatMissing.join(", ") || "none"}. ` +
-                `For compiler CSV use: type,question,option1,option2,option3,option4,correctAn,hasCompi,description,input1,output1,input2,output2.`,
-            );
-            return;
-          }
-
-          const activeFormat = hasMixedFormat
-            ? "mixed"
-            : hasModernFormat
-              ? "subject"
-              : "question";
-
-          if (activeFormat === "question" && !uploadTestName.trim()) {
-            reject(
-              "Enter a Target Subject Name before uploading the question format CSV.",
-            );
-            return;
-          }
-
-          for (let index = 0; index < rows.length; index += 1) {
-            const row = rows[index];
-            const rowNumber = index + 2;
-
-            const getValue = (normalizedKey) => {
-              const actualHeader = normalizedHeaders[normalizedKey];
-              return String(
-                actualHeader ? (row[actualHeader] ?? "") : "",
-              ).trim();
-            };
-
-            const getAnyValue = (...keys) => {
-              for (const key of keys) {
-                const value = getValue(key);
-                if (value) return value;
-              }
-              return "";
-            };
-
-            const subject =
-              activeFormat === "subject"
-                ? getValue("subject")
-                : activeFormat === "mixed"
-                  ? getValue("subject") || uploadTestName.trim()
-                  : uploadTestName.trim();
-            const text =
-              activeFormat === "subject"
-                ? getValue("text")
-                : getValue("question");
-            const options =
-              activeFormat === "subject"
-                ? [
-                    getValue("option1"),
-                    getValue("option2"),
-                    getValue("option3"),
-                    getValue("option4"),
-                  ]
-                : [
-                    getValue("option_a"),
-                    getValue("option_b"),
-                    getValue("option_c"),
-                    getValue("option_d"),
-                  ];
-            const correctAnswer =
-              activeFormat === "subject"
-                ? getValue("correctanswer")
-                : activeFormat === "mixed"
-                  ? getAnyValue("correctan", "correctanswer", "correctanswers")
-                  : getValue("correct_answer");
-
-            if (activeFormat === "mixed") {
-              const type = getValue("type").toUpperCase();
-              const hasCompiler =
-                getAnyValue("hascompi", "hascompiler").toLowerCase() === "true";
-              const isCoding = hasCompiler || type === "CODING";
-
-              if (isCoding) {
-                const missingCodingFields = [];
-                if (!subject) missingCodingFields.push("subject/testName");
-                if (!getValue("description"))
-                  missingCodingFields.push("description");
-                if (!getValue("input1")) missingCodingFields.push("input1");
-                if (!getValue("output1")) missingCodingFields.push("output1");
-                if (!getValue("input2")) missingCodingFields.push("input2");
-                if (!getValue("output2")) missingCodingFields.push("output2");
-
-                if (missingCodingFields.length > 0) {
-                  reject(
-                    `Row ${rowNumber} (CODING) is missing required value(s): ${missingCodingFields.join(", ")}.`,
-                  );
-                  return;
-                }
-                continue;
-              }
-            }
-
-            const missingFields = [];
-            if (!subject) missingFields.push("subject");
-            if (!text)
-              missingFields.push(
-                activeFormat === "subject" ? "text" : "question",
-              );
-            options.forEach((option, optionIndex) => {
-              if (!option) {
-                missingFields.push(
-                  activeFormat === "subject"
-                    ? `option${optionIndex + 1}`
-                    : `option_${String.fromCharCode(97 + optionIndex)}`,
-                );
-              }
-            });
-            if (!correctAnswer) {
-              missingFields.push(
-                activeFormat === "subject" ? "correctAnswer" : "correct_answer",
-              );
-            }
-
-            if (missingFields.length > 0) {
-              reject(
-                `Row ${rowNumber} is missing required value(s): ${missingFields.join(", ")}.`,
-              );
-              return;
-            }
-
-            const answerMatches = options.some(
-              (option) => option.toLowerCase() === correctAnswer.toLowerCase(),
-            );
-            if (!answerMatches) {
-              reject(
-                `Row ${rowNumber} has an invalid correct answer. It must match one of the provided options.`,
-              );
-              return;
-            }
-          }
-
+          const subjectHeader = normalizedHeaders.subject;
+          const fallbackSubject = uploadTestName.trim() || "General";
           const sections = [
             ...new Set(
               rows
-                .map((row) => {
-                  if (activeFormat === "subject") {
-                    const actualHeader = normalizedHeaders.subject;
-                    return String(
-                      actualHeader ? (row[actualHeader] ?? "") : "",
-                    ).trim();
-                  }
-                  if (activeFormat === "mixed") {
-                    const actualHeader = normalizedHeaders.subject;
-                    return String(
-                      actualHeader
-                        ? (row[actualHeader] ?? "")
-                        : uploadTestName.trim(),
-                    ).trim();
-                  }
-                  return uploadTestName.trim();
-                })
+                .map((row) =>
+                  String(
+                    subjectHeader ? (row[subjectHeader] ?? "") : fallbackSubject,
+                  ).trim(),
+                )
                 .filter(Boolean),
             ),
           ];
+
+          // Keep frontend validation intentionally light. The backend parser is
+          // the source of truth and supports several header variants.
           resolve({ count: rows.length, sections });
+          return;
+
         },
         error: (err) => reject(err.message),
       });

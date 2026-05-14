@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ClipboardList,
   Eye,
+  FileSearch,
   LayoutDashboard,
   List,
   LogOut,
@@ -247,7 +248,7 @@ export default function HRInterestedCandidates() {
             (candidate) => String(candidate.id) === String(row.candidateId),
           ) || null,
       })),
-    [interestedCandidates, hrUser, workflowCandidates],
+    [interestedCandidates, workflowCandidates],
   );
 
   const visibleRows = useMemo(
@@ -337,6 +338,15 @@ export default function HRInterestedCandidates() {
   const getWorkflowStatusLabel = (row) =>
     row.workflowCandidate?.applicationStatus || "INTERESTED";
 
+  const assignedTestCount = resultRows.reduce(
+    (total, row) => total + row.assignments.length,
+    0,
+  );
+  const completedSubmissionCount = resultRows.reduce(
+    (total, row) => total + row.submissions.length,
+    0,
+  );
+
   return (
     <div className="hri-layout">
       {dialogNode}
@@ -381,7 +391,7 @@ export default function HRInterestedCandidates() {
           <li className="hr-nav-group">
             <button
               type="button"
-              className="hr-nav-item hr-nav-group-trigger"
+              className="hr-nav-item hr-nav-group-trigger active"
               onClick={() => navigate("/hr/dashboard", { state: { activeTab: "view-jobs" } })}
             >
               <BriefcaseBusiness size={20} /> Job Portal
@@ -419,10 +429,67 @@ export default function HRInterestedCandidates() {
       </aside>
 
       <main className="hri-main">
+        <section className="hri-hero">
+          <div className="hri-hero-copy">
+            <p className="hri-hero-eyebrow">HR WORKSPACE</p>
+            <h1>Interested Candidates</h1>
+            <p>
+              Review applicants who showed interest in your openings, assign
+              assessments, and record hiring decisions from one focused view.
+            </p>
+          </div>
+          <div className="hri-hero-meta">
+            <div className="hri-hero-badge">
+              <BriefcaseBusiness size={16} />
+              <span>{selectedJobTitle || "All Job Posts"}</span>
+            </div>
+            <div className="hri-hero-user">
+              <strong>{hrUser?.fullName || hrUser?.name || "HR Team"}</strong>
+              <span>Candidate interest pipeline</span>
+            </div>
+          </div>
+        </section>
+
+        <section className="hri-stats-grid">
+          <article className="hri-stat-card">
+            <div className="hri-stat-icon blue">
+              <Users size={22} />
+            </div>
+            <div>
+              <span>Interested Candidates</span>
+              <strong>{visibleRows.length}</strong>
+            </div>
+          </article>
+          <article className="hri-stat-card">
+            <div className="hri-stat-icon indigo">
+              <ClipboardList size={22} />
+            </div>
+            <div>
+              <span>Assigned Tests</span>
+              <strong>{assignedTestCount}</strong>
+            </div>
+          </article>
+          <article className="hri-stat-card">
+            <div className="hri-stat-icon green">
+              <CheckCircle2 size={22} />
+            </div>
+            <div>
+              <span>Submitted Tests</span>
+              <strong>{completedSubmissionCount}</strong>
+            </div>
+          </article>
+        </section>
+
         {message ? <div className="hri-inline-msg">{message}</div> : null}
 
         <section className="hri-card">
-          <div className="jobs-toolbar" style={{ marginBottom: "18px" }}>
+          <div className="hri-section-header">
+            <div>
+              <h2>Candidate Interest Pipeline</h2>
+              <p>
+                Candidates listed here have shared interest in your posted role.
+              </p>
+            </div>
             <span className="jobs-summary-badge">
               {visibleRows.length} Interested Candidate
               {visibleRows.length === 1 ? "" : "s"}
@@ -431,8 +498,9 @@ export default function HRInterestedCandidates() {
           </div>
 
           {visibleRows.length === 0 ? (
-            <div className="jobs-empty-state">
-              No interested candidates available yet.
+            <div className="hri-empty-state">
+              <Users size={36} />
+              <p>No interested candidates available yet.</p>
             </div>
           ) : (
             <div className="hri-table-wrap">
@@ -452,10 +520,28 @@ export default function HRInterestedCandidates() {
                 <tbody>
                   {visibleRows.map((row) => (
                     <tr key={`${row.jobId}_${row.candidateId}`}>
-                      <td>{row.fullName}</td>
-                      <td>{row.skills || "Not provided"}</td>
+                      <td>
+                        <div className="hri-candidate-cell">
+                          <div className="hri-avatar">
+                            {(row.fullName || "C").charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="hri-cell-main">{row.fullName}</div>
+                            <div className="hri-cell-sub">
+                              {row.email || "No email available"}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span className="hri-skill-chip">
+                          {row.skills || "Not provided"}
+                        </span>
+                      </td>
                       <td>{row.experience ?? 0} years</td>
-                      <td>{row.jobTitle || "N/A"}</td>
+                      <td>
+                        <div className="hri-cell-main">{row.jobTitle || "N/A"}</div>
+                      </td>
                       <td>
                         <span className="hri-status pending">
                           {getWorkflowStatusLabel(row)}
@@ -510,18 +596,29 @@ export default function HRInterestedCandidates() {
           )}
         </section>
 
-        <section className="hri-card" style={{ marginTop: "18px" }}>
-          <div className="jobs-toolbar" style={{ marginBottom: "18px" }}>
+        <section className="hri-card">
+          <div className="hri-section-header">
+            <div>
+              <h2>HR Test Results & Review</h2>
+              <p>
+                Review assigned assessment progress before approving or
+                rejecting candidates.
+              </p>
+            </div>
             <span className="jobs-summary-badge">
-              HR Test Results & Review
+              {resultRows.length} Result Record{resultRows.length === 1 ? "" : "s"}
             </span>
           </div>
 
           {workflowLoading ? (
-            <div className="jobs-empty-state">Loading candidate test results...</div>
+            <div className="hri-empty-state">
+              <FileSearch size={36} />
+              <p>Loading candidate test results...</p>
+            </div>
           ) : resultRows.length === 0 ? (
-            <div className="jobs-empty-state">
-              No assigned-test results available for these interested candidates yet.
+            <div className="hri-empty-state">
+              <FileSearch size={36} />
+              <p>No assigned-test results available for these interested candidates yet.</p>
             </div>
           ) : (
             <div className="hri-table-wrap">
@@ -598,16 +695,23 @@ export default function HRInterestedCandidates() {
           )}
         </section>
 
-        <section className="hri-card" style={{ marginTop: "18px" }}>
-          <div className="jobs-toolbar" style={{ marginBottom: "18px" }}>
+        <section className="hri-card">
+          <div className="hri-section-header">
+            <div>
+              <h2>Feedback History</h2>
+              <p>
+                Track final approve or reject decisions sent back to Admin.
+              </p>
+            </div>
             <span className="jobs-summary-badge">
-              Feedback History
+              {feedbackRows.length} Feedback Record{feedbackRows.length === 1 ? "" : "s"}
             </span>
           </div>
 
           {feedbackRows.length === 0 ? (
-            <div className="jobs-empty-state">
-              No approve/reject feedback recorded for these interested candidates yet.
+            <div className="hri-empty-state">
+              <MessageSquare size={36} />
+              <p>No approve/reject feedback recorded for these interested candidates yet.</p>
             </div>
           ) : (
             <div className="hri-table-wrap">

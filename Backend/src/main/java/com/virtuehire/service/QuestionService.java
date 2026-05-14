@@ -99,7 +99,7 @@ public class QuestionService {
             Map<String, Integer> headers = csvParser.getHeaderMap();
             Set<String> normalizedHeaders = headers == null ? Set.of()
                     : headers.keySet().stream()
-                              .map(h -> h.trim().toLowerCase().replace(" ", ""))
+                              .map(this::normalizeHeader)
                               .collect(Collectors.toSet());
 
             boolean isMixedFormat = normalizedHeaders.contains("hascompiler")
@@ -208,8 +208,8 @@ public class QuestionService {
         if (output2.isBlank())     missing.add("output2");
         if (subject.isBlank())     missing.add("subject/testName");
 
-        String opt1 = safeGet(record, "option1");
-        String opt2 = safeGet(record, "option2");
+        String opt1 = safeGet(record, "option1", "optiona", "option_a");
+        String opt2 = safeGet(record, "option2", "optionb", "option_b");
         if (!opt1.isBlank() || !opt2.isBlank()) {
             throw new IllegalArgumentException(
                     "Row " + rowNum + ": CODING rows must NOT have options filled.");
@@ -246,17 +246,23 @@ public class QuestionService {
         String subject = safeGet(record, "subject");
         if (subject.isBlank()) subject = testName != null ? testName.trim() : "";
         String text          = safeGet(record, "question");
-        String opt1          = safeGet(record, "option1");
-        String opt2          = safeGet(record, "option2");
-        String opt3          = safeGet(record, "option3");
-        String opt4          = safeGet(record, "option4");
-        String correctAnswer = safeGet(record, "correctanswers", "correctanswer", "correctan");
+        String opt1          = safeGet(record, "option1", "optiona", "option_a");
+        String opt2          = safeGet(record, "option2", "optionb", "option_b");
+        String opt3          = safeGet(record, "option3", "optionc", "option_c");
+        String opt4          = safeGet(record, "option4", "optiond", "option_d");
+        String correctAnswer = safeGet(record, "correctanswers", "correctanswer", "correctan", "correct_answer");
 
         boolean blank = subject.isBlank() && text.isBlank() && opt1.isBlank();
         if (blank) return null;
 
         List<String> options = Arrays.asList(opt1, opt2, opt3, opt4);
-        Question question = new Question(1, text, options, correctAnswer, subject, subject);
+        String normalizedCorrectAnswer = normalizeCorrectAnswer(correctAnswer, options);
+        if (normalizedCorrectAnswer == null) {
+            throw new IllegalArgumentException(
+                    "Row " + rowNum + " has an invalid correct answer. Use A-D or exactly match one of the provided options.");
+        }
+
+        Question question = new Question(1, text, options, normalizedCorrectAnswer, subject, subject);
         applyOwnership(question, createdByRole, createdByHrId);
         return question;
     }
@@ -272,6 +278,13 @@ public class QuestionService {
                 }
             } catch (Exception ignored) {
                 // Try next alias
+            }
+
+            String normalizedKey = normalizeHeader(key);
+            for (Map.Entry<String, String> entry : record.toMap().entrySet()) {
+                if (normalizeHeader(entry.getKey()).equals(normalizedKey)) {
+                    return entry.getValue() != null ? entry.getValue().trim() : "";
+                }
             }
         }
         return "";
@@ -314,30 +327,43 @@ public class QuestionService {
             }
         }
 
-        List<String> subjectFormatMissing = findMissingHeaders(normalizedToActual,
-                List.of("subject", "text", "option1", "option2", "option3", "option4", "correctanswer"));
+        String subjectHeader = findHeader(normalizedToActual, "subject");
+        String questionHeader = findHeader(normalizedToActual, "text", "question");
+        String option1Header = findHeader(normalizedToActual, "option1", "optiona");
+        String option2Header = findHeader(normalizedToActual, "option2", "optionb");
+        String option3Header = findHeader(normalizedToActual, "option3", "optionc");
+        String option4Header = findHeader(normalizedToActual, "option4", "optiond");
+        String correctHeader = findHeader(normalizedToActual, "correctanswer", "correctanswers", "correctan");
 
-        List<String> legacyFormatMissing = findMissingHeaders(normalizedToActual,
-                List.of("question", "option_a", "option_b", "option_c", "option_d", "correct_answer"));
+        List<String> commonMissing = new ArrayList<>();
+        if (questionHeader == null) commonMissing.add("text/question");
+        if (option1Header == null) commonMissing.add("option1/option_a/optionA");
+        if (option2Header == null) commonMissing.add("option2/option_b/optionB");
+        if (option3Header == null) commonMissing.add("option3/option_c/optionC");
+        if (option4Header == null) commonMissing.add("option4/option_d/optionD");
+        if (correctHeader == null) commonMissing.add("correctAnswer/correct_answer/correctAn");
 
-        boolean subjectFormatSupported = subjectFormatMissing.isEmpty();
-        boolean legacyFormatSupported  = legacyFormatMissing.isEmpty();
+        boolean subjectFormatSupported = subjectHeader != null && commonMissing.isEmpty();
+        boolean legacyFormatSupported = subjectHeader == null && commonMissing.isEmpty();
 
         if (!subjectFormatSupported && !legacyFormatSupported) {
+            List<String> missing = new ArrayList<>(commonMissing);
+            if (subjectHeader == null && (testName == null || testName.trim().isBlank())) {
+                missing.add("subject or Target Subject Name");
+            }
             throw new IllegalArgumentException(
-                    "Invalid CSV headers. Missing columns for subject format: " + joinColumns(subjectFormatMissing)
-                            + ". Missing columns for question format: " + joinColumns(legacyFormatMissing) + ".");
+                    "Invalid CSV headers. Missing: " + joinColumns(missing) + ".");
         }
 
         if (subjectFormatSupported) {
             return Map.of(
-                    "subject",       normalizedToActual.get("subject"),
-                    "text",          normalizedToActual.get("text"),
-                    "option1",       normalizedToActual.get("option1"),
-                    "option2",       normalizedToActual.get("option2"),
-                    "option3",       normalizedToActual.get("option3"),
-                    "option4",       normalizedToActual.get("option4"),
-                    "correctAnswer", normalizedToActual.get("correctanswer"));
+                    "subject",       subjectHeader,
+                    "text",          questionHeader,
+                    "option1",       option1Header,
+                    "option2",       option2Header,
+                    "option3",       option3Header,
+                    "option4",       option4Header,
+                    "correctAnswer", correctHeader);
         }
 
         if (testName == null || testName.trim().isBlank()) {
@@ -346,12 +372,12 @@ public class QuestionService {
         }
 
         return Map.of(
-                "question",       normalizedToActual.get("question"),
-                "option_a",       normalizedToActual.get("option_a"),
-                "option_b",       normalizedToActual.get("option_b"),
-                "option_c",       normalizedToActual.get("option_c"),
-                "option_d",       normalizedToActual.get("option_d"),
-                "correct_answer", normalizedToActual.get("correct_answer"));
+                "question",       questionHeader,
+                "option_a",       option1Header,
+                "option_b",       option2Header,
+                "option_c",       option3Header,
+                "option_d",       option4Header,
+                "correct_answer", correctHeader);
     }
 
     private Question buildQuestionFromRecord(CSVRecord record, String testName,
@@ -396,16 +422,36 @@ public class QuestionService {
                     + " is missing required value(s): " + String.join(", ", missingFields) + ".");
         }
 
-        boolean answerMatchesOption = optionsList.stream()
-                .anyMatch(option -> option.equalsIgnoreCase(correctAnswer));
-        if (!answerMatchesOption) {
+        String normalizedCorrectAnswer = normalizeCorrectAnswer(correctAnswer, optionsList);
+        if (normalizedCorrectAnswer == null) {
             throw new IllegalArgumentException("Row " + record.getRecordNumber()
-                    + " has an invalid correct answer. The correct answer must exactly match one of the provided options.");
+                    + " has an invalid correct answer. Use A-D or exactly match one of the provided options.");
         }
 
-        Question question = new Question(1, text, optionsList, correctAnswer, subject, sectionName);
+        Question question = new Question(1, text, optionsList, normalizedCorrectAnswer, subject, sectionName);
         applyOwnership(question, createdByRole, createdByHrId);
         return question;
+    }
+
+    private String normalizeCorrectAnswer(String correctAnswer, List<String> optionsList) {
+        if (correctAnswer == null || optionsList == null || optionsList.size() < 4) {
+            return null;
+        }
+
+        String trimmedAnswer = correctAnswer.trim();
+        if (trimmedAnswer.length() == 1) {
+            int index = "ABCD".indexOf(trimmedAnswer.toUpperCase(Locale.ROOT));
+            if (index >= 0 && index < optionsList.size()) {
+                String option = optionsList.get(index);
+                return option != null && !option.isBlank() ? option.trim() : null;
+            }
+        }
+
+        return optionsList.stream()
+                .filter(option -> option != null && option.equalsIgnoreCase(trimmedAnswer))
+                .findFirst()
+                .map(String::trim)
+                .orElse(null);
     }
 
     private List<String> findMissingHeaders(Map<String, String> normalizedToActual,
@@ -415,12 +461,22 @@ public class QuestionService {
                 .collect(Collectors.toList());
     }
 
+    private String findHeader(Map<String, String> normalizedToActual, String... aliases) {
+        for (String alias : aliases) {
+            String actual = normalizedToActual.get(normalizeHeader(alias));
+            if (actual != null) {
+                return actual;
+            }
+        }
+        return null;
+    }
+
     private String joinColumns(List<String> columns) {
         return columns.isEmpty() ? "none" : String.join(", ", new LinkedHashSet<>(columns));
     }
 
     private String normalizeHeader(String header) {
-        return header == null ? "" : header.trim().toLowerCase().replace(" ", "");
+        return header == null ? "" : header.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
     }
 
     private String value(CSVRecord record, String actualHeader) {

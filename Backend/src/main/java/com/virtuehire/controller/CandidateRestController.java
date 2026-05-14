@@ -8,6 +8,7 @@ import com.virtuehire.model.Candidate;
 import com.virtuehire.model.CandidateStatus;
 import com.virtuehire.model.CandidateTestMapping;
 import com.virtuehire.service.AssessmentResultService;
+import com.virtuehire.service.AssessmentService;
 import com.virtuehire.service.CandidateService;
 import com.virtuehire.service.HiringWorkflowService;
 import com.virtuehire.service.TestAllocationService;
@@ -41,17 +42,20 @@ public class CandidateRestController {
 
     private final CandidateService candidateService;
     private final AssessmentResultService assessmentResultService;
+    private final AssessmentService assessmentService;
     private final HiringWorkflowService hiringWorkflowService;
     private final TestAllocationService testAllocationService;
     private final Path uploadDir;
 
     public CandidateRestController(CandidateService candidateService,
             AssessmentResultService assessmentResultService,
+            AssessmentService assessmentService,
             HiringWorkflowService hiringWorkflowService,
             TestAllocationService testAllocationService,
             @Value("${file.upload-dir}") String uploadDirPath) {
         this.candidateService = candidateService;
         this.assessmentResultService = assessmentResultService;
+        this.assessmentService = assessmentService;
         this.hiringWorkflowService = hiringWorkflowService;
         this.testAllocationService = testAllocationService;
         this.uploadDir = StoragePathResolver.resolveUploadDir(uploadDirPath);
@@ -263,6 +267,7 @@ public class CandidateRestController {
                 Arrays.stream(candidate.getAssignedAssessmentName().split(","))
                         .map(String::trim)
                         .filter(name -> !name.isBlank())
+                        .filter(assessmentService::isAutoAssignableAssessmentName)
                         .forEach(assessmentSet::add);
             }
 

@@ -1,8 +1,22 @@
 import React, { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
+import {
+  CheckCircle,
+  CreditCard,
+  Eye,
+  FileDown,
+  IndianRupee,
+  Loader2,
+  Receipt,
+  RefreshCw,
+  XCircle,
+} from "lucide-react";
 import api from "../../services/api";
+import AdminLayout from "./AdminLayout";
+import "./AdminDashboard.css";
 
 const PaymentDashboard = () => {
+  const navigate = useNavigate();
   const [payments, setPayments] = useState([]);
   const [stats, setStats] = useState({
     totalPayments: 0,
@@ -13,122 +27,156 @@ const PaymentDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const navigate = useNavigate();
+  const fetchPayments = async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const res = await api.get("/payments/history");
+      const data = Array.isArray(res.data) ? res.data : res.data?.payments || [];
+
+      const successfulPayments = data.filter((p) => p.status === "SUCCESS");
+      const failedPayments = data.filter((p) => p.status === "FAILED");
+
+      setPayments(data);
+      setStats({
+        totalPayments: data.length,
+        successfulPayments: successfulPayments.length,
+        failedPayments: failedPayments.length,
+        totalRevenue: successfulPayments.reduce(
+          (sum, p) => sum + (Number(p.amount) || 0),
+          0,
+        ),
+      });
+    } catch (err) {
+      console.error(err);
+      setError("Failed to load payments.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchPayments = async () => {
-      try {
-        const res = await api.get("/payments/history");
-        const data = res.data || [];
-
-        const totalPayments = data.length;
-        const successfulPayments = data.filter(
-          (p) => p.status === "SUCCESS",
-        ).length;
-        const failedPayments = totalPayments - successfulPayments;
-        const totalRevenue = data.reduce((sum, p) => sum + (p.amount || 0), 0);
-
-        setPayments(data);
-        setStats({
-          totalPayments,
-          successfulPayments,
-          failedPayments,
-          totalRevenue,
-        });
-        setLoading(false);
-      } catch (err) {
-        console.error(err);
-        setError("Failed to load payments.");
-        setLoading(false);
-      }
-    };
-
     fetchPayments();
   }, []);
 
   const getStatusClass = (status) => {
     switch (status) {
       case "SUCCESS":
-        return "badge bg-success";
+        return "adm-pay-status success";
       case "FAILED":
-        return "badge bg-danger";
+        return "adm-pay-status failed";
       case "PENDING":
-        return "badge bg-warning";
+        return "adm-pay-status pending";
       default:
-        return "badge bg-secondary";
+        return "adm-pay-status neutral";
     }
   };
 
-  if (loading) return <p>Loading payment dashboard...</p>;
-  if (error) return <p className="text-danger">{error}</p>;
+  const formatCurrency = (amount) =>
+    new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      maximumFractionDigits: 2,
+    }).format(Number(amount) || 0);
+
+  const formatDate = (date) => {
+    if (!date) return "N/A";
+    return new Date(date).toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
 
   return (
-    <div className="container-fluid my-4">
-      <h1 className="mb-4">
-        <i className="fas fa-chart-line me-2"></i>Payment Dashboard
-      </h1>
+    <AdminLayout
+      title="Payments"
+      description="Track HR plan purchases, payment outcomes, and revenue activity from the admin workspace."
+      contentClassName="adm-module-stack"
+    >
+      <div className="adm-stats-grid adm-payment-stats">
+        <div className="adm-stat-card blue">
+          <div className="adm-stat-icon">
+            <IndianRupee size={20} />
+          </div>
+          <div>
+            <div className="adm-stat-value">
+              {formatCurrency(stats.totalRevenue)}
+            </div>
+            <div className="adm-stat-label">Total Revenue</div>
+          </div>
+        </div>
 
-      {/* Stats Cards */}
-      <div className="row g-4 mb-4">
-        <div className="col-xl-3 col-md-6">
-          <div className="card text-white bg-primary">
-            <div className="card-body d-flex justify-content-between align-items-center">
-              <div>
-                <h5>{stats.totalRevenue.toFixed(2)}</h5>
-                <p>Total Revenue</p>
-              </div>
-              <i className="fas fa-rupee-sign fa-2x"></i>
-            </div>
+        <div className="adm-stat-card purple">
+          <div className="adm-stat-icon">
+            <Receipt size={20} />
+          </div>
+          <div>
+            <div className="adm-stat-value">{stats.totalPayments}</div>
+            <div className="adm-stat-label">Total Payments</div>
           </div>
         </div>
-        <div className="col-xl-3 col-md-6">
-          <div className="card text-white bg-success">
-            <div className="card-body d-flex justify-content-between align-items-center">
-              <div>
-                <h5>{stats.totalPayments}</h5>
-                <p>Total Payments</p>
-              </div>
-              <i className="fas fa-receipt fa-2x"></i>
-            </div>
+
+        <div className="adm-stat-card green">
+          <div className="adm-stat-icon">
+            <CheckCircle size={20} />
+          </div>
+          <div>
+            <div className="adm-stat-value">{stats.successfulPayments}</div>
+            <div className="adm-stat-label">Successful</div>
           </div>
         </div>
-        <div className="col-xl-3 col-md-6">
-          <div className="card text-white bg-warning">
-            <div className="card-body d-flex justify-content-between align-items-center">
-              <div>
-                <h5>{stats.successfulPayments}</h5>
-                <p>Successful</p>
-              </div>
-              <i className="fas fa-check-circle fa-2x"></i>
-            </div>
+
+        <div className="adm-stat-card yellow">
+          <div className="adm-stat-icon">
+            <XCircle size={20} />
           </div>
-        </div>
-        <div className="col-xl-3 col-md-6">
-          <div className="card text-white bg-danger">
-            <div className="card-body d-flex justify-content-between align-items-center">
-              <div>
-                <h5>{stats.failedPayments}</h5>
-                <p>Failed</p>
-              </div>
-              <i className="fas fa-times-circle fa-2x"></i>
-            </div>
+          <div>
+            <div className="adm-stat-value">{stats.failedPayments}</div>
+            <div className="adm-stat-label">Failed</div>
           </div>
         </div>
       </div>
 
-      {/* Recent Transactions */}
-      <div className="card mt-4">
-        <div className="card-header d-flex justify-content-between align-items-center">
-          <h5 className="mb-0">Recent Transactions</h5>
-          <button
-            className="btn btn-sm btn-outline-primary"
-            onClick={() => window.location.reload()}
-          >
-            <i className="fas fa-sync-alt me-1"></i>Refresh
+      {error && (
+        <div className="adm-card adm-payment-alert">
+          <XCircle size={18} />
+          <span>{error}</span>
+          <button type="button" onClick={fetchPayments}>
+            Retry
           </button>
         </div>
-        <div className="card-body table-responsive">
-          <table className="table table-hover">
+      )}
+
+      <div className="adm-card adm-table-card-lg">
+        <div className="adm-table-card-head">
+          <div>
+            <h3>Recent Transactions</h3>
+            <p>
+              {payments.length} payment record
+              {payments.length === 1 ? "" : "s"} found
+            </p>
+          </div>
+          <button
+            type="button"
+            className="adm-refresh-btn"
+            onClick={fetchPayments}
+            disabled={loading}
+          >
+            {loading ? (
+              <Loader2 size={16} className="adm-spin" />
+            ) : (
+              <RefreshCw size={16} />
+            )}
+            Refresh
+          </button>
+        </div>
+
+        <div className="adm-table-container">
+          <table>
             <thead>
               <tr>
                 <th>HR Name</th>
@@ -140,38 +188,55 @@ const PaymentDashboard = () => {
               </tr>
             </thead>
             <tbody>
-              {payments.length > 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan="6" className="adm-empty-table">
+                    <Loader2 className="adm-spin" size={30} />
+                    <p>Loading payment dashboard...</p>
+                  </td>
+                </tr>
+              ) : payments.length > 0 ? (
                 payments.map((payment) => (
                   <tr key={payment.id}>
-                    <td>{payment.hr?.fullName || "N/A"}</td>
                     <td>
-                      <span className="badge bg-secondary">
-                        {payment.planType}
+                      <div className="adm-t-name">
+                        {payment.hr?.fullName || payment.hrName || "N/A"}
+                      </div>
+                      <div className="adm-t-email">
+                        {payment.hr?.email || payment.hrEmail || "No email"}
+                      </div>
+                    </td>
+                    <td>
+                      <span className="adm-plan-pill">
+                        <CreditCard size={13} />
+                        {payment.planType || "N/A"}
                       </span>
                     </td>
-                    <td>₹{payment.amount?.toFixed(2)}</td>
+                    <td className="adm-pay-amount">
+                      {formatCurrency(payment.amount)}
+                    </td>
                     <td>
                       <span className={getStatusClass(payment.status)}>
-                        {payment.status}
+                        {payment.status || "UNKNOWN"}
                       </span>
                     </td>
-                    <td>{new Date(payment.createdAt).toLocaleString()}</td>
+                    <td>{formatDate(payment.createdAt)}</td>
                     <td>
                       <button
-                        className="btn btn-sm btn-outline-info"
-                        onClick={() =>
-                          navigate(`/admin/payments/${payment.id}`)
-                        }
+                        type="button"
+                        className="adm-icon-action"
+                        title="View payment details"
+                        onClick={() => navigate(`/admin/payments/${payment.id}`)}
                       >
-                        <i className="fas fa-eye"></i>
+                        <Eye size={16} />
                       </button>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="6" className="text-center text-muted py-4">
-                    <i className="fas fa-inbox fa-2x mb-2"></i>
+                  <td colSpan="6" className="adm-empty-table">
+                    <Receipt size={42} />
                     <p>No transactions found.</p>
                   </td>
                 </tr>
@@ -181,32 +246,31 @@ const PaymentDashboard = () => {
         </div>
       </div>
 
-      {/* Export Section */}
-      <div className="card mt-4">
-        <div className="card-header">
-          <h5 className="mb-0">Data Export</h5>
-        </div>
-        <div className="card-body">
-          <div className="row g-3">
-            <div className="col-md-4">
-              <button className="btn btn-outline-primary w-100">
-                <i className="fas fa-file-excel me-2"></i>Export to Excel
-              </button>
-            </div>
-            <div className="col-md-4">
-              <button className="btn btn-outline-success w-100">
-                <i className="fas fa-file-csv me-2"></i>Export to CSV
-              </button>
-            </div>
-            <div className="col-md-4">
-              <button className="btn btn-outline-info w-100">
-                <i className="fas fa-chart-bar me-2"></i>Generate Report
-              </button>
-            </div>
+      <div className="adm-card adm-payment-export">
+        <div className="adm-card-header">
+          <div>
+            <h3>Data Export</h3>
+            <p className="adm-card-subtitle">
+              Download payment records for reporting and reconciliation.
+            </p>
           </div>
         </div>
+        <div className="adm-export-grid">
+          <button type="button" className="adm-export-btn">
+            <FileDown size={18} />
+            Export to Excel
+          </button>
+          <button type="button" className="adm-export-btn">
+            <FileDown size={18} />
+            Export to CSV
+          </button>
+          <button type="button" className="adm-export-btn">
+            <Receipt size={18} />
+            Generate Report
+          </button>
+        </div>
       </div>
-    </div>
+    </AdminLayout>
   );
 };
 

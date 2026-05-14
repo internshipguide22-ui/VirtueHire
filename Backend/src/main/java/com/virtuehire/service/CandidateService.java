@@ -312,7 +312,9 @@ public class CandidateService {
     }
 
     private void applyAssessmentAssignment(Candidate candidate) {
-        List<String> existingAssignments = getAssignedAssessmentNames(candidate);
+        List<String> existingAssignments = getAssignedAssessmentNames(candidate).stream()
+                .filter(assessmentService::isAutoAssignableAssessmentName)
+                .toList();
         List<String> displaySkills = extractDisplaySkills(candidate.getSkills());
 
         if (displaySkills.isEmpty()) {

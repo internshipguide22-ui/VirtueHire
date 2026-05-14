@@ -1,3 +1,5 @@
+
+
 package com.virtuehire.service;
 
 import jakarta.annotation.PostConstruct;
@@ -13,6 +15,10 @@ public class DatabaseSchemaFixer {
 
     @PostConstruct
     public void fixSchema() {
+        makeLegacyQuestionTextColumnNullable();
+        makeLegacyQuestionOptionColumnsNullable();
+        makeTestIdColumnNullable();
+
         /*
          * try {
          * System.out.println("Checking and fixing database schema index...");
@@ -47,5 +53,56 @@ public class DatabaseSchemaFixer {
          * e.printStackTrace();
          * }
          */
+    }
+
+    private void makeLegacyQuestionTextColumnNullable() {
+        try {
+            // The Question entity now explicitly maps to question_text column
+            // No need for migration logic since we're using the correct column name
+            if (!columnExists("questions", "question_text")) {
+                System.out.println("question_text column does not exist in database");
+            }
+        } catch (Exception e) {
+            System.out.println("Question schema compatibility check skipped for question_text: " + e.getMessage());
+        }
+    }
+
+    private void makeLegacyQuestionOptionColumnsNullable() {
+        String[] legacyOptionColumns = {
+                "optiona", "optionb", "optionc", "optiond",
+                "option_a", "option_b", "option_c", "option_d"
+        };
+
+        for (String column : legacyOptionColumns) {
+            try {
+                if (columnExists("questions", column)) {
+                    jdbcTemplate.execute("ALTER TABLE questions MODIFY " + column + " VARCHAR(1000) NULL");
+                }
+            } catch (Exception e) {
+                System.out.println("Question schema compatibility check skipped for " + column + ": " + e.getMessage());
+            }
+        }
+    }
+
+    private void makeTestIdColumnNullable() {
+        try {
+            if (columnExists("questions", "test_id")) {
+                jdbcTemplate.execute("ALTER TABLE questions MODIFY test_id BIGINT NULL");
+                System.out.println("Made test_id column nullable in questions table");
+            }
+        } catch (Exception e) {
+            System.out.println("Question schema compatibility check skipped for test_id: " + e.getMessage());
+        }
+    }
+
+    private boolean columnExists(String tableName, String columnName) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                        + "WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?",
+                Integer.class,
+                tableName,
+                columnName);
+
+        return count != null && count > 0;
     }
 }

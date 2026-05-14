@@ -15,7 +15,7 @@ public class Question {
     @Column(nullable = false)
     private int level;
 
-    @Column(nullable = false, length = 1000)
+    @Column(name = "question_text", nullable = false, length = 1000)
     private String text;
 
     @ElementCollection(fetch = FetchType.EAGER)
@@ -55,6 +55,17 @@ public class Question {
 
     @Column(name = "created_by_hr_id")
     private Long createdByHrId;
+
+    @Column(name = "test_id", nullable = true)
+    private Long testId;
+
+    public Long getTestId() {
+        return testId;
+    }
+
+    public void setTestId(Long testId) {
+        this.testId = testId;
+    }
 
     // ===== Constructors =====
     public Question() {

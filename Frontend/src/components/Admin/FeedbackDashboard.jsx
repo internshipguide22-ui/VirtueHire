@@ -15,6 +15,7 @@ import {
   Filter,
   Eye,
 } from "lucide-react";
+import AdminLayout from "./AdminLayout";
 import "./FeedbackDashboard.css";
 
 const STATUS_CONFIG = {
@@ -92,25 +93,25 @@ const FeedbackDashboard = () => {
 
   if (loading) {
     return (
-      <div className="feedback-dashboard-loading">
-        <Loader2 className="animate-spin" size={32} />
-        <p>Loading feedback data...</p>
-      </div>
+      <AdminLayout
+        title="Feedback Review"
+        description="Review final HR decisions, assigned tests, and notes for approved or rejected candidates."
+        contentClassName="adm-module-stack"
+      >
+        <div className="feedback-dashboard-loading adm-card">
+          <Loader2 className="animate-spin" size={32} />
+          <p>Loading feedback data...</p>
+        </div>
+      </AdminLayout>
     );
   }
 
   return (
-    <div className="feedback-dashboard">
-      <div className="feedback-dashboard-header">
-        <div className="header-title">
-          <MessageSquare size={24} />
-          <h1>HR Feedback Dashboard</h1>
-        </div>
-        <p className="header-subtitle">
-          Review all approved and rejected candidates with HR feedback
-        </p>
-      </div>
-
+    <AdminLayout
+      title="Feedback Review"
+      description="Review final HR decisions, assigned tests, and notes for approved or rejected candidates."
+      contentClassName="feedback-dashboard adm-module-stack"
+    >
       {error && (
         <div className="feedback-dashboard-error">
           <X size={20} />
@@ -122,21 +123,27 @@ const FeedbackDashboard = () => {
       {/* Summary Stats */}
       <div className="feedback-summary">
         <div className="summary-card approved">
-          <CheckCircle size={24} />
+          <div className="summary-icon">
+            <CheckCircle size={22} />
+          </div>
           <div className="summary-info">
             <span className="summary-number">{approvedCount}</span>
             <span className="summary-label">Approved</span>
           </div>
         </div>
         <div className="summary-card rejected">
-          <XCircle size={24} />
+          <div className="summary-icon">
+            <XCircle size={22} />
+          </div>
           <div className="summary-info">
             <span className="summary-number">{rejectedCount}</span>
             <span className="summary-label">Rejected</span>
           </div>
         </div>
         <div className="summary-card total">
-          <User size={24} />
+          <div className="summary-icon">
+            <User size={22} />
+          </div>
           <div className="summary-info">
             <span className="summary-number">{candidates.length}</span>
             <span className="summary-label">Total Processed</span>
@@ -169,7 +176,9 @@ const FeedbackDashboard = () => {
         <div className="feedback-summary">
           {allocationHistory.slice(0, 4).map((item) => (
             <div key={item.testId || item.testName} className="summary-card total">
-              <FileText size={24} />
+              <div className="summary-icon">
+                <FileText size={22} />
+              </div>
               <div className="summary-info">
                 <span className="summary-number">{item.totalAssignments}</span>
                 <span className="summary-label">{item.testName}</span>
@@ -181,6 +190,12 @@ const FeedbackDashboard = () => {
 
       {/* Candidates Table */}
       <div className="feedback-table-container">
+        <div className="feedback-table-heading">
+          <div>
+            <h3>Candidate Feedback Records</h3>
+            <p>{filteredCandidates.length} record{filteredCandidates.length === 1 ? "" : "s"} found</p>
+          </div>
+        </div>
         <table className="feedback-table">
           <thead>
             <tr>
@@ -340,7 +355,7 @@ const FeedbackDashboard = () => {
           </div>
         </div>
       )}
-    </div>
+    </AdminLayout>
   );
 };
 

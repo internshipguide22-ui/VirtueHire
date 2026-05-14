@@ -13,17 +13,18 @@
   bottom: 0;
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding: 28px 20px;
+  gap: 26px;
+  padding: 30px 22px;
   background: linear-gradient(180deg, #172033 0%, #1e293b 100%);
   color: #fff;
   z-index: 100;
+  box-shadow: 14px 0 40px rgba(15, 23, 42, 0.22);
 }
 
 .hr-sidebar-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
 }
 
 .hr-sidebar-mark {
@@ -114,23 +115,27 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
+}
+
+.hr-nav-list-item {
+  list-style: none;
 }
 
 .hr-nav-item {
   width: 100%;
   border: none;
-  border-radius: 8px;
-  padding: 10px 14px;
+  border-radius: 12px;
+  padding: 12px 16px;
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: 12px;
   background: transparent;
   color: #cbd5e1;
-  font-size: 0.93rem;
+  font-size: 0.95rem;
   font-weight: 500;
-  line-height: 1.2;
+  line-height: 1.3;
   cursor: pointer;
   transition: all 0.2s ease;
   text-align: left;
@@ -142,38 +147,37 @@
   color: #e0e7ff;
 }
 
-.hr-nav-item.active {
-  background: transparent;
+.hr-nav-item.active,
+.hr-nav-group-trigger.active {
+  background: rgba(59, 130, 246, 0.18);
   color: #fff;
   font-weight: 600;
 }
+
 .hr-nav-group {
   width: 100%;
-}
-.hr-nav-group-trigger {
-  text-align: left;
-  justify-content: flex-start; /* add this */
-}
-.hr-nav-group {
   list-style: none;
   margin: 0;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .hr-nav-group-trigger {
   width: 100%;
   border: none;
-  border-radius: 8px;
-  padding: 10px 14px;
+  border-radius: 12px;
+  padding: 12px 16px;
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: 12px;
   background: transparent;
   color: #cbd5e1;
-  font-size: 0.93rem;
+  font-size: 0.95rem;
   font-weight: 500;
-  line-height: 1.2;
+  line-height: 1.3;
   cursor: pointer;
   transition: all 0.2s ease;
   text-align: left;
@@ -186,7 +190,7 @@
 }
 
 .hr-nav-group-trigger.active {
-  background: transparent;
+  background: rgba(59, 130, 246, 0.18);
   color: #fff;
   font-weight: 600;
 }
@@ -194,14 +198,15 @@
 .hr-nav-group-panel {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   max-height: 0;
   opacity: 0;
   overflow: hidden;
   pointer-events: none;
   transition:
     max-height 0.24s ease,
-    opacity 0.24s ease;
+    opacity 0.24s ease,
+    margin-top 0.24s ease;
   margin-top: 0;
 }
 
@@ -215,21 +220,21 @@
 }
 
 .hr-sub-nav-item {
-  margin-left: 12px;
-  padding: 8px 12px;
-  border-radius: 6px;
+  margin-left: 16px;
+  padding: 10px 14px;
+  border-radius: 10px;
   border: none;
   background: transparent;
-  width: calc(100% - 12px);
+  width: calc(100% - 16px);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px;
+  gap: 10px;
   color: #cbd5e1;
-  font-size: 0.88rem;
+  font-size: 0.9rem;
   font-weight: 500;
-  line-height: 1.2;
+  line-height: 1.3;
   transition: all 0.2s ease;
   text-align: left;
   white-space: nowrap;
@@ -250,6 +255,10 @@
   margin-top: auto;
   padding-top: 24px;
   border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.hr-sidebar-footer .hr-btn-logout {
+  width: 100%;
 }
 
 .hr-btn-logout {
@@ -449,16 +458,19 @@
   padding: 32px;
   border: 1px solid rgba(148, 163, 184, 0.16);
   background:
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.06), transparent 26%),
+    radial-gradient(
+      circle at top right,
+      rgba(59, 130, 246, 0.06),
+      transparent 26%
+    ),
     linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
 }
 
 .hr-candidate-filters {
   display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) minmax(
-      180px,
-      1fr
-    ) 180px 180px auto;
+  grid-template-columns:
+    minmax(220px, 1.4fr) minmax(180px, 1fr)
+    180px 180px auto;
   gap: 14px;
   align-items: center;
   margin-bottom: 22px;

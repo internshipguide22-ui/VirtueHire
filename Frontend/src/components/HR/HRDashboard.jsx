@@ -406,28 +406,37 @@ const HRDashboard = () => {
           </div>
         )}
 
-        <nav className="hr-nav-list">
-          <button
-            type="button"
-            className={`hr-nav-item ${activeTab === "overview" ? "active" : ""}`}
-            onClick={() => setActiveTab("overview")}
-          >
-            <LayoutDashboard size={18} />
-            Dashboard
-          </button>
-          <button
-            type="button"
-            className={`hr-nav-item ${activeTab === "candidates" ? "active" : ""}`}
-            onClick={() => setActiveTab("candidates")}
-          >
-            <Users size={18} />
-            Candidates
-          </button>
-          <div
+        <ul className="hr-nav-list" role="menu">
+          <li className="hr-nav-list-item" role="none">
+            <button
+              type="button"
+              role="menuitem"
+              className={`hr-nav-item ${activeTab === "overview" ? "active" : ""}`}
+              onClick={() => setActiveTab("overview")}
+            >
+              <LayoutDashboard size={18} />
+              Dashboard
+            </button>
+          </li>
+          <li className="hr-nav-list-item" role="none">
+            <button
+              type="button"
+              role="menuitem"
+              className={`hr-nav-item ${activeTab === "candidates" ? "active" : ""}`}
+              onClick={() => setActiveTab("candidates")}
+            >
+              <Users size={18} />
+              Candidates
+            </button>
+          </li>
+          <li
             className={`hr-nav-group ${activeTab === "create-job" || activeTab === "view-jobs" ? "open" : ""}`}
+            role="none"
           >
             <button
               type="button"
+              role="menuitem"
+              aria-expanded={activeTab === "create-job" || activeTab === "view-jobs"}
               className={`hr-nav-item hr-nav-group-trigger ${activeTab === "create-job" || activeTab === "view-jobs" ? "active" : ""}`}
               onClick={() => setActiveTab("view-jobs")}
             >
@@ -437,6 +446,7 @@ const HRDashboard = () => {
             <div className="hr-nav-group-panel">
               <button
                 type="button"
+                role="menuitem"
                 className={`hr-sub-nav-item ${activeTab === "create-job" ? "active" : ""}`}
                 onClick={() => setActiveTab("create-job")}
               >
@@ -444,22 +454,26 @@ const HRDashboard = () => {
               </button>
               <button
                 type="button"
+                role="menuitem"
                 className={`hr-sub-nav-item ${activeTab === "view-jobs" ? "active" : ""}`}
                 onClick={() => setActiveTab("view-jobs")}
               >
                 <List size={16} /> View Jobs
               </button>
             </div>
-          </div>
-          <button
-            type="button"
-            className={`hr-nav-item ${activeTab === "manage-tests" ? "active" : ""}`}
-            onClick={() => setActiveTab("manage-tests")}
-          >
-            <ClipboardList size={18} />
-            Manage Tests
-          </button>
-        </nav>
+          </li>
+          <li className="hr-nav-list-item" role="none">
+            <button
+              type="button"
+              role="menuitem"
+              className={`hr-nav-item ${activeTab === "manage-tests" ? "active" : ""}`}
+              onClick={() => setActiveTab("manage-tests")}
+            >
+              <ClipboardList size={18} />
+              Manage Tests
+            </button>
+          </li>
+        </ul>
 
         <div className="hr-sidebar-footer">
           <button className="hr-btn-logout" onClick={handleLogout}>
