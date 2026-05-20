@@ -6,6 +6,8 @@ import com.virtuehire.util.StoragePathResolver;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
@@ -14,11 +16,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.web.multipart.MultipartFile;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/admin")
@@ -108,13 +114,15 @@ public class AdminRestController {
         response.put("paymentStats", paymentStats);
         response.put("totalRevenue", totalRevenue);
         response.put("pendingAccessRequests", candidateAccessRequestService.countPending());
-        response.put("pendingCombinedAssessmentRequests", adminNotificationService.countOpenCombinedAssessmentNotifications());
-        response.put("combinedAssessmentNotifications", adminNotificationService.getOpenCombinedAssessmentNotifications().stream()
-                .map(notification -> Map.of(
-                        "id", notification.getId(),
-                        "message", notification.getMessage(),
-                        "createdAt", notification.getCreatedAt()))
-                .toList());
+        response.put("pendingCombinedAssessmentRequests",
+                adminNotificationService.countOpenCombinedAssessmentNotifications());
+        response.put("combinedAssessmentNotifications",
+                adminNotificationService.getOpenCombinedAssessmentNotifications().stream()
+                        .map(notification -> Map.of(
+                                "id", notification.getId(),
+                                "message", notification.getMessage(),
+                                "createdAt", notification.getCreatedAt()))
+                        .toList());
 
         return ResponseEntity.ok(response);
     }
@@ -363,7 +371,8 @@ public class AdminRestController {
         if (payload.getEmail() != null && !payload.getEmail().isBlank()) {
             Candidate existingByEmail = candidateService.findByEmail(payload.getEmail());
             if (existingByEmail != null && !existingByEmail.getId().equals(candidate.getId())) {
-                return ResponseEntity.badRequest().body(Map.of("error", "Email already registered. Please use a different email."));
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "Email already registered. Please use a different email."));
             }
         }
 
@@ -424,13 +433,16 @@ public class AdminRestController {
                     data.put("hrEmail", request.getHr().getEmail());
                     data.put("candidateId", request.getCandidate().getId());
                     data.put("candidateName", request.getCandidate().getFullName());
-                    data.put("candidateRole", request.getCandidate().getBadge() != null && !request.getCandidate().getBadge().isBlank()
-                            ? request.getCandidate().getBadge()
-                            : request.getCandidate().getExperienceLevel() != null && !request.getCandidate().getExperienceLevel().isBlank()
-                                    ? request.getCandidate().getExperienceLevel()
-                                    : "Candidate");
+                    data.put("candidateRole",
+                            request.getCandidate().getBadge() != null && !request.getCandidate().getBadge().isBlank()
+                                    ? request.getCandidate().getBadge()
+                                    : request.getCandidate().getExperienceLevel() != null
+                                            && !request.getCandidate().getExperienceLevel().isBlank()
+                                                    ? request.getCandidate().getExperienceLevel()
+                                                    : "Candidate");
                     data.put("candidateExperience",
-                            request.getCandidate().getExperience() != null ? request.getCandidate().getExperience() : 0);
+                            request.getCandidate().getExperience() != null ? request.getCandidate().getExperience()
+                                    : 0);
                     return data;
                 })
                 .toList();
@@ -484,31 +496,61 @@ public class AdminRestController {
                 "payments", paymentService.getPaymentsByHr(id)));
     }
 
-    // ---------------------- DOWNLOAD RESUME ------------------------
-    @GetMapping("/download/resume/{candidateId}")
-    public ResponseEntity<Resource> downloadResume(@PathVariable Long candidateId) {
+    // ---------------------- CANDIDATE FILES ------------------------
+    @GetMapping("/candidates/{candidateId}/resume")
+    public ResponseEntity<Resource> accessCandidateResume(
+            @PathVariable Long candidateId,
+            @RequestParam(defaultValue = "inline") String disposition,
+            HttpSession session) {
+        ResponseEntity<Map<String, String>> forbidden = requireAdmin(session);
+        if (forbidden != null) {
+            return ResponseEntity.status(forbidden.getStatusCode()).build();
+        }
 
         Candidate candidate = candidateService.findById(candidateId).orElse(null);
-        if (candidate == null || candidate.getResumePath() == null)
+        if (candidate == null || candidate.getResumePath() == null || candidate.getResumePath().isBlank()) {
             return ResponseEntity.notFound().build();
+        }
 
         try {
-            Path filePath = uploadDir.resolve(candidate.getResumePath()).normalize();
-
-            Resource resource = new UrlResource(filePath.toUri());
-
-            if (!resource.exists() || !resource.isReadable())
-                return ResponseEntity.notFound().build();
-
-            return ResponseEntity.ok()
-                    .header(HttpHeaders.CONTENT_DISPOSITION,
-                            "attachment; filename=\"" + resource.getFilename() + "\"")
-                    .body(resource);
-
+            // CHANGED: Admin resume view/download now uses the same safe file resolver
+            // as profile images, so files work from Backend/uploads or sibling uploads.
+            return serveStoredFile(candidate.getResumePath(), disposition);
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("Failed to serve admin candidate resume for candidate {}", candidateId, e);
             return ResponseEntity.internalServerError().build();
         }
+    }
+
+    @GetMapping("/candidates/{candidateId}/profile-picture")
+    public ResponseEntity<Resource> accessCandidateProfilePicture(
+            @PathVariable Long candidateId,
+            @RequestParam(defaultValue = "inline") String disposition,
+            HttpSession session) {
+        ResponseEntity<Map<String, String>> forbidden = requireAdmin(session);
+        if (forbidden != null) {
+            return ResponseEntity.status(forbidden.getStatusCode()).build();
+        }
+
+        Candidate candidate = candidateService.findById(candidateId).orElse(null);
+        if (candidate == null || candidate.getProfilePic() == null || candidate.getProfilePic().isBlank()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        try {
+            // CHANGED: Added an admin profile-image endpoint so the candidate
+            // details page no longer depends on the public candidate file route.
+            return serveStoredFile(candidate.getProfilePic(), disposition);
+        } catch (Exception e) {
+            logger.error("Failed to serve admin candidate profile picture for candidate {}", candidateId, e);
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    // Backward-compatible route kept for older admin screens.
+    @GetMapping("/download/resume/{candidateId}")
+    public ResponseEntity<Resource> downloadResume(@PathVariable Long candidateId, HttpSession session) {
+        return accessCandidateResume(candidateId, "attachment", session);
     }
 
     // ---------------------- PAYMENTS ------------------------
@@ -603,6 +645,7 @@ public class AdminRestController {
             }
 
             Assessment assessment = assessmentService.createAssessment(assessmentName, description, sections);
+            candidateService.refreshAllAssessmentAssignments();
             return ResponseEntity.ok(Map.of(
                     "message", "Assessment created successfully",
                     "assessmentId", assessment.getId()));
@@ -635,6 +678,12 @@ public class AdminRestController {
             int totalQuestions = sections.stream().mapToInt(AssessmentSection::getQuestionCount).sum();
             int totalTime = sections.stream().mapToInt(AssessmentSection::getSectionTime).sum();
 
+            // Get section modes
+            List<String> sectionModes = sections.stream()
+                    .map(AssessmentSection::getSectionMode)
+                    .distinct()
+                    .toList();
+
             liveList.add(Map.of(
                     "id", assessment.getId(),
                     "assessmentName", assessment.getAssessmentName(),
@@ -642,7 +691,8 @@ public class AdminRestController {
                     "sectionCount", sections.size(),
                     "totalQuestions", totalQuestions,
                     "totalTime", totalTime,
-                    "isLocked", assessment.isLocked()));
+                    "isLocked", assessment.isLocked(),
+                    "sectionModes", sectionModes));
         }
 
         return ResponseEntity.ok(Map.of("assessments", liveList));
@@ -695,14 +745,34 @@ public class AdminRestController {
 
         try {
             assessmentService.toggleLock(id, lock);
-            return ResponseEntity.ok(Map.of("message", "Assessment " + (lock ? "locked" : "unlocked") + " successfully."));
+            return ResponseEntity
+                    .ok(Map.of("message", "Assessment " + (lock ? "locked" : "unlocked") + " successfully."));
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of("error", "Failed to update assessment status."));
         }
     }
 
-    // ------------------ CANDIDATE CUMULATIVE RESULTS (BADGES/EXPERT STATUS) ------------------
-    // FIX: Added endpoint so Admin can see candidate Expert badges with verified indicator
+    @PutMapping("/assessments/{id}/section-mode")
+    public ResponseEntity<?> updateSectionMode(@PathVariable Long id,
+            @RequestParam String sectionMode,
+            @RequestParam(required = false) String supportedLanguages,
+            HttpSession session) {
+        ResponseEntity<Map<String, String>> forbidden = requireAdmin(session);
+        if (forbidden != null)
+            return forbidden;
+
+        try {
+            assessmentService.updateSectionMode(id, sectionMode, supportedLanguages);
+            return ResponseEntity.ok(Map.of("message", "Section mode updated successfully."));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", "Failed to update section mode: " + e.getMessage()));
+        }
+    }
+
+    // ------------------ CANDIDATE CUMULATIVE RESULTS (BADGES/EXPERT STATUS)
+    // ------------------
+    // FIX: Added endpoint so Admin can see candidate Expert badges with verified
+    // indicator
     @GetMapping("/candidates/{candidateId}/cumulative-results")
     public ResponseEntity<?> getCandidateCumulativeResults(@PathVariable Long candidateId, HttpSession session) {
         ResponseEntity<Map<String, String>> forbidden = requireAdmin(session);
@@ -715,12 +785,147 @@ public class AdminRestController {
         }
 
         // Get cumulative results with badge info (e.g., "Java1 Expert")
-        List<Map<String, Object>> cumulativeResults = assessmentResultService.getCandidateCumulativeResults(candidateId);
+        List<Map<String, Object>> cumulativeResults = assessmentResultService
+                .getCandidateCumulativeResults(candidateId);
 
         return ResponseEntity.ok(Map.of(
                 "candidateId", candidateId,
                 "candidateName", candidate.getFullName(),
                 "cumulativeResults", cumulativeResults,
                 "currentBadge", candidate.getBadge()));
+    }
+
+    private ResponseEntity<Resource> serveStoredFile(String storedFileName, String disposition) throws IOException {
+        String normalizedStoredFileName = extractFileName(storedFileName);
+        if (normalizedStoredFileName.isBlank()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        Path path = resolveStoredFilePath(normalizedStoredFileName);
+        if (path == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        Path alternateDir = getAlternateUploadDir();
+        boolean inUploadDir = path.startsWith(uploadDir);
+        boolean inAlternateDir = alternateDir != null && path.startsWith(alternateDir);
+
+        if (!inUploadDir && !inAlternateDir) {
+            logger.warn("Admin file path outside allowed directories: {}", path);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
+        Resource resource = new UrlResource(path.toUri());
+        if (!Files.exists(path) || !resource.isReadable()) {
+            logger.warn("Admin file not found or unreadable: {}", path);
+            return ResponseEntity.notFound().build();
+        }
+
+        String contentType = Files.probeContentType(path);
+        if (contentType == null || contentType.isBlank()) {
+            contentType = "application/octet-stream";
+        }
+
+        String safeDisposition = "attachment".equalsIgnoreCase(disposition) ? "attachment" : "inline";
+        String downloadName = getOriginalFileName(normalizedStoredFileName);
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(contentType))
+                .header(HttpHeaders.CONTENT_DISPOSITION, safeDisposition + "; filename=\"" + downloadName + "\"")
+                .body(resource);
+    }
+
+    private Path resolveStoredFilePath(String storedFileName) {
+        Path primaryPath = uploadDir.resolve(storedFileName).normalize();
+        if (Files.exists(primaryPath) && Files.isReadable(primaryPath)) {
+            return primaryPath;
+        }
+
+        Path alternateUploadDir = getAlternateUploadDir();
+        if (alternateUploadDir != null) {
+            Path alternatePath = alternateUploadDir.resolve(storedFileName).normalize();
+            if (Files.exists(alternatePath) && Files.isReadable(alternatePath)) {
+                return alternatePath;
+            }
+        }
+
+        Path fuzzyMatch = findMatchingStoredFile(storedFileName);
+        return fuzzyMatch != null ? fuzzyMatch : primaryPath;
+    }
+
+    private Path findMatchingStoredFile(String storedFileName) {
+        String normalizedRequestedName = extractFileName(storedFileName);
+        String requestedOriginalName = getOriginalFileName(normalizedRequestedName);
+
+        List<Path> candidateDirs = new ArrayList<>();
+        candidateDirs.add(uploadDir);
+        Path alternateUploadDir = getAlternateUploadDir();
+        if (alternateUploadDir != null && !alternateUploadDir.equals(uploadDir)) {
+            candidateDirs.add(alternateUploadDir);
+        }
+
+        for (Path dir : candidateDirs) {
+            if (dir == null || !Files.isDirectory(dir)) {
+                continue;
+            }
+
+            try (var stream = Files.list(dir)) {
+                Optional<Path> match = stream
+                        .filter(Files::isRegularFile)
+                        .filter(path -> {
+                            String candidateName = extractFileName(path.getFileName().toString());
+                            String candidateOriginalName = getOriginalFileName(candidateName);
+                            return candidateName.equalsIgnoreCase(normalizedRequestedName)
+                                    || candidateOriginalName.equalsIgnoreCase(normalizedRequestedName)
+                                    || candidateOriginalName.equalsIgnoreCase(requestedOriginalName);
+                        })
+                        .findFirst();
+
+                if (match.isPresent()) {
+                    return match.get().normalize();
+                }
+            } catch (IOException ignored) {
+            }
+        }
+
+        return null;
+    }
+
+    private Path getAlternateUploadDir() {
+        Path current = uploadDir.toAbsolutePath().normalize();
+        Path parent = current.getParent();
+        if (parent == null) {
+            return null;
+        }
+
+        Path currentName = current.getFileName();
+        Path parentName = parent.getFileName();
+
+        if (currentName != null && "uploads".equalsIgnoreCase(currentName.toString())
+                && parentName != null && "Backend".equalsIgnoreCase(parentName.toString())
+                && parent.getParent() != null) {
+            Path siblingUploads = parent.getParent().resolve("uploads").normalize();
+            if (Files.exists(siblingUploads)) {
+                return siblingUploads;
+            }
+        }
+
+        return null;
+    }
+
+    private String extractFileName(String fileName) {
+        if (fileName == null) {
+            return "";
+        }
+        return Paths.get(fileName).getFileName().toString().trim();
+    }
+
+    private String getOriginalFileName(String storedFileName) {
+        String safeFileName = extractFileName(storedFileName);
+        int separatorIndex = safeFileName.indexOf('_');
+        if (separatorIndex > -1 && separatorIndex < safeFileName.length() - 1) {
+            return safeFileName.substring(separatorIndex + 1);
+        }
+        return safeFileName;
     }
 }

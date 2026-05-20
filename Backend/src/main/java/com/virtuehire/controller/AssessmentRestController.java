@@ -22,8 +22,7 @@ import com.virtuehire.model.CandidateTestMapping;
 
 @RestController
 @RequestMapping("/api/assessment")
-@CrossOrigin(origins = { "https://admin.virtuehire.in", "https://virtuehire.in", "http://localhost:3000" },
-             allowCredentials = "true")
+@CrossOrigin(origins = "https://admin.virtuehire.in", allowCredentials = "true")
 public class AssessmentRestController {
 
     private final AssessmentResultService resultService;

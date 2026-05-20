@@ -49,11 +49,24 @@ public class JwtInterceptor implements HandlerInterceptor {
 
         // Public endpoints
         String path = request.getRequestURI();
-        if (path.startsWith("/api/auth/") || path.startsWith("/api/public/") || 
-            path.startsWith("/api/hrs/login") || path.startsWith("/api/hrs/register") || 
-            path.startsWith("/api/hrs/verify-email")) {
-            return true;
-        }
+       if (
+    path.startsWith("/api/auth/") ||
+    path.startsWith("/api/public/") ||
+
+    path.startsWith("/api/hrs/login") ||
+    path.startsWith("/api/hrs/register") ||
+    path.startsWith("/api/hrs/verify-email") ||
+
+    path.startsWith("/api/candidates/login") ||
+    path.startsWith("/api/candidates/register") ||
+    path.startsWith("/api/candidates/verify-otp") ||
+    path.startsWith("/api/candidates/verify-email") ||
+    path.startsWith("/api/candidates/resend-otp") ||
+    path.startsWith("/api/candidates/forgot-password") ||
+    path.startsWith("/api/candidates/reset-password")
+) {
+    return true;
+}
 
         HttpSession existingSession = request.getSession(false);
         if (hasAuthenticatedSession(existingSession)) {

@@ -632,13 +632,17 @@ public class QuestionService {
 
         if (draft.isCoding()) {
             question.setText("");
-            question.setOptions(List.of());
+            question.setOptions(new ArrayList<>());
             question.setCorrectAnswer("");
             question.setHasCompiler(true);
             question.setQuestionType("CODING");
         } else {
             question.setText(draft.questionText().trim());
-            question.setOptions(draft.options().stream().map(String::trim).toList());
+            // CHANGED: Hibernate manages Question.options as an @ElementCollection.
+            // Use a mutable list so editing HR manual questions can flush cleanly.
+            question.setOptions(draft.options().stream()
+                    .map(String::trim)
+                    .collect(Collectors.toCollection(ArrayList::new)));
             question.setCorrectAnswer(draft.correctAnswer().trim());
             question.setHasCompiler(false);
             question.setQuestionType("MCQ");
@@ -730,12 +734,14 @@ public class QuestionService {
             question = new Question(draft.subject().trim(), draft.subject().trim(), true, "CODING");
             question.setText("");
             question.setCorrectAnswer("");
-            question.setOptions(List.of());
+            question.setOptions(new ArrayList<>());
         } else {
             question = new Question(
                     1,
                     draft.questionText().trim(),
-                    draft.options().stream().map(String::trim).toList(),
+                    draft.options().stream()
+                            .map(String::trim)
+                            .collect(Collectors.toCollection(ArrayList::new)),
                     draft.correctAnswer().trim(),
                     draft.subject().trim(),
                     draft.subject().trim());
@@ -793,10 +799,16 @@ public class QuestionService {
                 : "");
         entry.put("testCases", question.isHasCompiler()
                 ? testCaseRepo.findByQuestionId(question.getId()).stream()
-                    .map(testCase -> Map.of(
-                            "id", (Object) testCase.getId(),
-                            "input", (Object) testCase.getInput(),
-                            "expectedOutput", (Object) testCase.getExpectedOutput()))
+                    .map(testCase -> {
+                        // CHANGED: Avoid Map.of here because it rejects null values
+                        // and can turn manual coding-question responses into 500s.
+                        Map<String, Object> testCaseEntry = new LinkedHashMap<>();
+                        testCaseEntry.put("id", testCase.getId());
+                        testCaseEntry.put("input", testCase.getInput() != null ? testCase.getInput() : "");
+                        testCaseEntry.put("expectedOutput",
+                                testCase.getExpectedOutput() != null ? testCase.getExpectedOutput() : "");
+                        return testCaseEntry;
+                    })
                     .collect(Collectors.toList())
                 : List.of());
         return entry;

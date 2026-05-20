@@ -31,7 +31,20 @@ public class WebConfig implements WebMvcConfigurer {
                         "/api/candidates/forgot-password",
                         "/api/candidates/reset-password",
                         "/api/candidates/resumes/draft/pdf",
-                        "/api/candidates/file/**");
+                        "/api/candidates/file/**",
+
+// ── BEFORE ────────────────────────────────────────
+// "/api/candidates/me/resume" was NOT excluded here,
+// so the JwtInterceptor blocked the request before it
+// reached CandidateRestController, causing 401/404.
+// Same problem for profile-pic and hrs/file endpoints.
+// ── AFTER ─────────────────────────────────────────
+// These session-based endpoints use HttpSession auth,
+// NOT JWT — so they must bypass the JWT interceptor.
+"/api/candidates/me/resume",
+"/api/candidates/me/profile-pic",
+"/api/hrs/file/**"
+);
     }
 
     @Override
@@ -41,9 +54,11 @@ public class WebConfig implements WebMvcConfigurer {
                         "https://admin.virtuehire.in",
                         "https://virtuehire.in",
                         "https://www.virtuehire.in",
-                        "http://localhost:3000"
+                        "https://backend.virtuehire.in",
+                        "http://localhost:3000",
+                        "http://localhost:3001"
                 )
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                .allowedMethods("*")
                 .allowedHeaders("*")
                 .allowCredentials(true);
     }

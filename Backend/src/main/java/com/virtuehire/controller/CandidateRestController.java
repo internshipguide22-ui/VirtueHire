@@ -20,6 +20,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.mail.MailException;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -59,12 +60,12 @@ public class CandidateRestController {
         this.hiringWorkflowService = hiringWorkflowService;
         this.testAllocationService = testAllocationService;
         this.uploadDir = StoragePathResolver.resolveUploadDir(uploadDirPath);
-        
+
         // Log the resolved upload directory for debugging
         logger.info("Upload directory configured: {}", uploadDirPath);
         logger.info("Resolved upload directory: {}", this.uploadDir.toAbsolutePath());
         logger.info("Upload directory exists: {}", Files.exists(this.uploadDir));
-        
+
         // Create directory if it doesn't exist
         if (!Files.exists(this.uploadDir)) {
             try {
@@ -111,8 +112,10 @@ public class CandidateRestController {
         candidateService.save(candidate);
 
         String message = "Candidate registered successfully!";
+        boolean emailSent = false;
         try {
             candidateService.sendVerificationMail(candidate);
+            emailSent = true;
             message += " Please check your email for the OTP.";
         } catch (Exception ex) {
             logger.error("Candidate registered but verification email failed for {}", candidate.getEmail(), ex);
@@ -122,6 +125,7 @@ public class CandidateRestController {
         return ResponseEntity.ok(Map.of(
                 "message", message,
                 "requiresOtpVerification", true,
+                "emailSent", emailSent,
                 "candidate", toCandidateResponse(candidate)));
     }
 
@@ -238,8 +242,8 @@ public class CandidateRestController {
                 return ResponseEntity.status(404).body(Map.of("error", "Candidate not found"));
             }
 
-            // Do not recompute assignments here; this endpoint should be read-only
-            // and must not mutate existing assignment state on each request.
+            // Refresh assignment state before returning the latest available tests.
+            candidate = candidateService.refreshAssessmentAssignment(candidate);
             session.setAttribute("candidate", candidate);
 
             // Use LinkedHashSet to deduplicate while preserving insertion order.
@@ -251,7 +255,8 @@ public class CandidateRestController {
 
             // Source 1: candidate_test_mapping for this specific candidate.
             LocalDateTime now = LocalDateTime.now();
-            List<CandidateTestMapping> assignedMappings = hiringWorkflowService.getAssignedTestsForCandidate(candidate.getId()).stream()
+            List<CandidateTestMapping> assignedMappings = hiringWorkflowService
+                    .getAssignedTestsForCandidate(candidate.getId()).stream()
                     .filter(mapping -> mapping.getAvailableFrom() == null || !mapping.getAvailableFrom().isAfter(now))
                     .toList();
             assignedMappings.stream()
@@ -261,13 +266,12 @@ public class CandidateRestController {
                     .filter(name -> !name.isBlank())
                     .forEach(assessmentSet::add);
 
-            // Source 2: admin-assigned names stored on candidate profile.
+            // Source 2: admin/HR-assigned names stored on candidate profile.
             if (candidate.getAssignedAssessmentName() != null
                     && !candidate.getAssignedAssessmentName().isBlank()) {
                 Arrays.stream(candidate.getAssignedAssessmentName().split(","))
                         .map(String::trim)
                         .filter(name -> !name.isBlank())
-                        .filter(assessmentService::isAutoAssignableAssessmentName)
                         .forEach(assessmentSet::add);
             }
 
@@ -283,7 +287,8 @@ public class CandidateRestController {
                     "assessments", new ArrayList<>(assessmentSet),
                     "assignedAssessmentName", !assessmentSet.isEmpty()
                             ? String.join(",", assessmentSet)
-                            : (candidate.getAssignedAssessmentName() != null ? candidate.getAssignedAssessmentName() : ""),
+                            : (candidate.getAssignedAssessmentName() != null ? candidate.getAssignedAssessmentName()
+                                    : ""),
                     "assessmentAssignmentStatus", assessmentSet.isEmpty() ? "NOT_ASSIGNED" : "ASSIGNED",
                     "assessmentAssignmentMessage", assessmentSet.isEmpty()
                             ? "No tests assigned yet. Please wait for HR to assign your test."
@@ -470,8 +475,18 @@ public class CandidateRestController {
         try {
             candidateService.resendVerificationMail(email.trim());
             return ResponseEntity.ok(Map.of("message", "A new OTP has been sent to your email."));
+        } catch (MailException ex) {
+            logger.error("Failed to resend candidate OTP email for {}", email, ex);
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                    .body(Map.of("error", "Could not send OTP email right now. Please try again later."));
         } catch (RuntimeException ex) {
-            return ResponseEntity.status(400).body(Map.of("error", ex.getMessage()));
+            String message = ex.getMessage() == null ? "Failed to resend OTP" : ex.getMessage();
+            HttpStatus status = "Candidate not found".equalsIgnoreCase(message)
+                    ? HttpStatus.NOT_FOUND
+                    : "Email is already verified".equalsIgnoreCase(message)
+                            ? HttpStatus.CONFLICT
+                            : HttpStatus.BAD_REQUEST;
+            return ResponseEntity.status(status).body(Map.of("error", message));
         }
     }
 
@@ -543,14 +558,18 @@ public class CandidateRestController {
         data.put("experienceLevel", candidate.getExperienceLevel());
         data.put("skills", candidate.getSkills());
         data.put("resumePath", candidate.getResumePath());
-        data.put("resumeUrl", candidate.getResumePath() != null ? "/api/candidates/me/resume?disposition=inline" : null);
-        data.put("resumeDownloadUrl", candidate.getResumePath() != null ? "/api/candidates/me/resume?disposition=attachment" : null);
+        data.put("resumeUrl",
+                candidate.getResumePath() != null ? "/api/candidates/me/resume?disposition=inline" : null);
+        data.put("resumeDownloadUrl",
+                candidate.getResumePath() != null ? "/api/candidates/me/resume?disposition=attachment" : null);
         data.put("profilePic", candidate.getProfilePic());
-        data.put("profilePicUrl", candidate.getProfilePic() != null ? "/api/candidates/file/" + candidate.getProfilePic() : null);
+        data.put("profilePicUrl",
+                candidate.getProfilePic() != null ? "/api/candidates/file/" + candidate.getProfilePic() : null);
         data.put("badge", candidate.getBadge());
         data.put("score", candidate.getScore());
         data.put("approved", candidate.getApproved());
-        data.put("applicationStatus", candidate.getApplicationStatus() != null ? candidate.getApplicationStatus().name() : null);
+        data.put("applicationStatus",
+                candidate.getApplicationStatus() != null ? candidate.getApplicationStatus().name() : null);
         data.put("hrFeedback", candidate.getHrFeedback());
         data.put("statusUpdatedAt", candidate.getStatusUpdatedAt());
         data.put("emailVerified", candidate.getEmailVerified());
@@ -565,7 +584,7 @@ public class CandidateRestController {
     // ==================== HIRING WORKFLOW ENDPOINTS ====================
 
     // --------- MARK CANDIDATE AS INTERESTED ---------
-    @PostMapping({"/interested/{candidateId}", "/me/interested"})
+    @PostMapping({ "/interested/{candidateId}", "/me/interested" })
     public ResponseEntity<?> markInterested(@PathVariable(required = false) Long candidateId, HttpSession session) {
         try {
             if (candidateId == null) {
@@ -634,7 +653,7 @@ public class CandidateRestController {
         }
     }
 
-    @GetMapping({"/tests", "/my-tests"})
+    @GetMapping({ "/tests", "/my-tests" })
     public ResponseEntity<?> getCandidateTests(HttpSession session) {
         return getMyAssignedTests(session);
     }
@@ -711,7 +730,8 @@ public class CandidateRestController {
             Integer scoreObtained = Integer.parseInt(String.valueOf(request.getOrDefault("scoreObtained", "0")));
             String submissionDetails = String.valueOf(request.getOrDefault("submissionDetails", "")).trim();
 
-            CandidateTestMapping mapping = hiringWorkflowService.getAssignedTestsForCandidate(candidate.getId()).stream()
+            CandidateTestMapping mapping = hiringWorkflowService.getAssignedTestsForCandidate(candidate.getId())
+                    .stream()
                     .filter(item -> Objects.equals(item.getId(), mappingId))
                     .findFirst()
                     .orElse(null);
@@ -732,7 +752,8 @@ public class CandidateRestController {
             submission.setSubmissionDetails(submissionDetails);
 
             AssignmentSubmission saved = hiringWorkflowService.submitAssignment(submission);
-            CandidateTestMapping updatedMapping = testAllocationService.markTestSubmitted(mapping.getId(), scoreObtained);
+            CandidateTestMapping updatedMapping = testAllocationService.markTestSubmitted(mapping.getId(),
+                    scoreObtained);
 
             return ResponseEntity.ok(Map.of(
                     "message", "Assignment submitted successfully",
@@ -764,8 +785,8 @@ public class CandidateRestController {
         }
 
         file.transferTo(storedPath.toFile());
-        logger.info("Stored file: {} (original: {}, size: {} bytes) at {}", 
-            storedFileName, originalName, file.getSize(), storedPath);
+        logger.info("Stored file: {} (original: {}, size: {} bytes) at {}",
+                storedFileName, originalName, file.getSize(), storedPath);
         return storedFileName;
     }
 
@@ -780,30 +801,31 @@ public class CandidateRestController {
 
         Path path = resolveStoredFilePath(normalizedStoredFileName);
         if (path == null) {
-            logger.warn("Could not resolve file path for: '{}' in uploadDir: '{}'", normalizedStoredFileName, uploadDir);
+            logger.warn("Could not resolve file path for: '{}' in uploadDir: '{}'", normalizedStoredFileName,
+                    uploadDir);
             return ResponseEntity.notFound().build();
         }
 
         Path alternateDir = getAlternateUploadDir();
         boolean inUploadDir = path.startsWith(uploadDir);
         boolean inAlternateDir = alternateDir != null && path.startsWith(alternateDir);
-        
+
         if (!inUploadDir && !inAlternateDir) {
-            logger.warn("File path outside allowed directories: {} (uploadDir: {}, alternate: {})", 
-                path, inUploadDir, inAlternateDir);
+            logger.warn("File path outside allowed directories: {} (uploadDir: {}, alternate: {})",
+                    path, inUploadDir, inAlternateDir);
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
 
         boolean fileExists = Files.exists(path);
         long fileSize = fileExists ? Files.size(path) : 0;
-        
+
         Resource resource = new UrlResource(path.toUri());
         if (!fileExists || !resource.isReadable()) {
-            logger.warn("File not found or not readable: '{}' (exists: {}, size: {} bytes)", 
-                path, fileExists, fileSize);
+            logger.warn("File not found or not readable: '{}' (exists: {}, size: {} bytes)",
+                    path, fileExists, fileSize);
             return ResponseEntity.notFound().build();
         }
-        
+
         logger.info("Successfully serving file: '{}' (size: {} bytes)", path, fileSize);
 
         String contentType = Files.probeContentType(path);
@@ -882,7 +904,7 @@ public class CandidateRestController {
         if (uploadDir.isAbsolute()) {
             return null;
         }
-        
+
         Path current = uploadDir.toAbsolutePath().normalize();
         Path parent = current.getParent();
         if (parent == null) {
@@ -922,10 +944,10 @@ public class CandidateRestController {
     }
 
     // Exception handler to catch and log multipart/form-data errors
-    @ExceptionHandler({IllegalStateException.class, IOException.class})
+    @ExceptionHandler({ IllegalStateException.class, IOException.class })
     public ResponseEntity<?> handleFileUploadErrors(Exception ex) {
         logger.error("File upload error: {}", ex.getMessage(), ex);
         return ResponseEntity.badRequest().body(Map.of(
-            "error", "File upload failed: " + ex.getMessage()));
+                "error", "File upload failed: " + ex.getMessage()));
     }
 }

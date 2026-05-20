@@ -1,6 +1,6 @@
 package com.virtuehire.controller;
+
 import com.virtuehire.model.AssessmentResult;
-import java.util.Optional;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.virtuehire.model.Candidate;
@@ -40,7 +40,7 @@ import org.slf4j.LoggerFactory;
 
 @RestController
 @RequestMapping("/api/hrs")
-@CrossOrigin(origins = { "https://admin.virtuehire.in", "https://backend.virtuehire.in", "http://localhost:3000" }, allowCredentials = "true")
+@CrossOrigin(origins = "https://admin.virtuehire.in", allowCredentials = "true")
 public class HrRestController {
 
     private static final Logger logger = LoggerFactory.getLogger(HrRestController.class);
@@ -114,15 +114,19 @@ public class HrRestController {
 
         hrService.save(hr);
         String message = "Registration successful!";
+        boolean emailSent = false;
         try {
             hrService.sendVerificationMail(hr);
+            emailSent = true;
             // CHANGED: removed "wait for admin approval" — free 3-month trial messaging
             message += " Please verify your email using the code sent to your inbox. After that you'll have full access for 3 months, free!";
         } catch (Exception ex) {
             logger.error("HR registered but verification email failed for {}", hr.getEmail(), ex);
             message += " We could not send the verification email right now. Please try again later.";
         }
-        return ResponseEntity.ok(Map.of("message", message));
+        return ResponseEntity.ok(Map.of(
+                "message", message,
+                "emailSent", emailSent));
     }
 
     // ------------------ VERIFY HR EMAIL ------------------
@@ -133,7 +137,8 @@ public class HrRestController {
         boolean verified = hrService.verifyEmail(email, code);
         if (verified) {
             // CHANGED: removed "Admin will now review your application"
-            return ResponseEntity.ok(Map.of("message", "Email verified successfully! You now have full access for 3 months, free of charge."));
+            return ResponseEntity.ok(Map.of("message",
+                    "Email verified successfully! You now have full access for 3 months, free of charge."));
         } else {
             return ResponseEntity.status(400).body(Map.of("error", "Invalid verification code"));
         }
@@ -460,8 +465,11 @@ public class HrRestController {
                 return ResponseEntity.badRequest().body(Map.of("error", "Invalid assessment data."));
             }
 
-            Assessment assessment = assessmentService.createAssessment(assessmentName, description, sections, hr.getId());
-            return ResponseEntity.ok(Map.of("message", "Assessment created successfully", "assessmentId", assessment.getId()));
+            Assessment assessment = assessmentService.createAssessment(assessmentName, description, sections,
+                    hr.getId());
+            candidateService.refreshAllAssessmentAssignments();
+            return ResponseEntity
+                    .ok(Map.of("message", "Assessment created successfully", "assessmentId", assessment.getId()));
         } catch (RuntimeException e) {
             logger.warn("HR assessment creation failed: {}", e.getMessage(), e);
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -562,14 +570,28 @@ public class HrRestController {
         }
 
         try {
-            return ResponseEntity.ok(Map.of(
-                    "message", "Question updated successfully",
-                    "question", questionService.updateManualQuestionForHr(
-                            questionId,
-                            toManualQuestionDraft(payload),
-                            hr.getId())));
+            Map<String, Object> updatedQuestion = questionService.updateManualQuestionForHr(
+                    questionId,
+                    toManualQuestionDraft(payload),
+                    hr.getId());
+
+            // CHANGED: Use a mutable response map for manual-question edits so a
+            // nullable value from the saved question can never break the PUT response.
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("message", "Question updated successfully");
+            response.put("question", updatedQuestion);
+            return ResponseEntity.ok(response);
         } catch (RuntimeException ex) {
+            logger.warn("HR manual question update failed for question {}: {}", questionId, ex.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        } catch (Exception ex) {
+            // CHANGED: Keep manual-question edit failures from falling through to
+            // Spring's generic "Internal Server Error" response in the HR builder UI.
+            logger.error("HR manual question update failed unexpectedly for question {}", questionId, ex);
+            return ResponseEntity.status(500).body(Map.of("error",
+                    ex.getMessage() != null && !ex.getMessage().isBlank()
+                            ? ex.getMessage()
+                            : "Failed to update question"));
         }
     }
 
@@ -641,6 +663,12 @@ public class HrRestController {
             int totalQuestions = sections.stream().mapToInt(AssessmentSection::getQuestionCount).sum();
             int totalTime = sections.stream().mapToInt(AssessmentSection::getSectionTime).sum();
 
+            // Get section modes
+            List<String> sectionModes = sections.stream()
+                    .map(AssessmentSection::getSectionMode)
+                    .distinct()
+                    .toList();
+
             liveList.add(Map.of(
                     "id", a.getId(),
                     "assessmentName", a.getAssessmentName(),
@@ -648,7 +676,8 @@ public class HrRestController {
                     "sectionCount", sections.size(),
                     "totalQuestions", totalQuestions,
                     "totalTime", totalTime,
-                    "isLocked", a.isLocked()));
+                    "isLocked", a.isLocked(),
+                    "sectionModes", sectionModes));
         }
 
         return ResponseEntity.ok(Map.of("assessments", liveList));
@@ -682,9 +711,28 @@ public class HrRestController {
 
         try {
             assessmentService.toggleLock(id, lock);
-            return ResponseEntity.ok(Map.of("message", "Assessment " + (lock ? "locked" : "unlocked") + " successfully."));
+            return ResponseEntity
+                    .ok(Map.of("message", "Assessment " + (lock ? "locked" : "unlocked") + " successfully."));
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of("error", "Failed to update assessment status."));
+        }
+    }
+
+    // ------------------ UPDATE SECTION MODE ------------------
+    @PutMapping("/assessments/{id}/section-mode")
+    public ResponseEntity<?> updateSectionMode(@PathVariable Long id,
+            @RequestParam String sectionMode,
+            @RequestParam(required = false) String supportedLanguages,
+            HttpSession session) {
+        Hr hr = (Hr) session.getAttribute("hr");
+        if (hr == null)
+            return ResponseEntity.status(401).body(Map.of("error", "Not logged in"));
+
+        try {
+            assessmentService.updateSectionMode(id, sectionMode, supportedLanguages);
+            return ResponseEntity.ok(Map.of("message", "Section mode updated successfully."));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", "Failed to update section mode: " + e.getMessage()));
         }
     }
 
@@ -697,7 +745,8 @@ public class HrRestController {
 
         Hr refreshedHr = refreshHr(hr, session);
 
-        // CHANGED: replaced per-candidate access-request filter with single trial/plan check
+        // CHANGED: replaced per-candidate access-request filter with single trial/plan
+        // check
         if (!hrService.isAccessAllowed(refreshedHr)) {
             return ResponseEntity.status(403).body(Map.of(
                     "error", "Your free trial has expired. Please purchase a plan to continue.",
@@ -804,7 +853,8 @@ public class HrRestController {
         if (answersJson == null || answersJson.isBlank()) {
             return List.of();
         }
-        return objectMapper.readValue(answersJson, new TypeReference<List<Map<String, Object>>>() {});
+        return objectMapper.readValue(answersJson, new TypeReference<List<Map<String, Object>>>() {
+        });
     }
 
     // ------------------ LOGOUT ------------------
@@ -875,7 +925,7 @@ public class HrRestController {
         try {
             // DEBUG: Log the entire request body
             logger.info("ASSIGN TEST API: Received request body: {}", request);
-            
+
             Object candidateIdObj = request.get("candidateId");
             Object testIdsObj = request.get("testIds");
             Object testIdObj = request.get("testId");
@@ -902,8 +952,8 @@ public class HrRestController {
                 return ResponseEntity.status(404).body(Map.of("error", "Candidate not found with id: " + candidateId));
             }
 
-            logger.info("ASSIGN TEST API: HR {} assigning tests to candidate {} - {}", 
-                hr.getId(), candidateId, candidate.getFullName());
+            logger.info("ASSIGN TEST API: HR {} assigning tests to candidate {} - {}",
+                    hr.getId(), candidateId, candidate.getFullName());
 
             List<Long> testIds = new ArrayList<>();
 
@@ -927,11 +977,12 @@ public class HrRestController {
                 }
             }
 
-            var mappings = testAllocationService.assignMultipleTestsToCandidate(candidateId, testIds, hr.getId(), availableFrom);
-            
-            logger.info("ASSIGN TEST API SUCCESS: HR {} assigned {} tests to candidate {}", 
-                hr.getId(), mappings.size(), candidateId);
-            
+            var mappings = testAllocationService.assignMultipleTestsToCandidate(candidateId, testIds, hr.getId(),
+                    availableFrom);
+
+            logger.info("ASSIGN TEST API SUCCESS: HR {} assigned {} tests to candidate {}",
+                    hr.getId(), mappings.size(), candidateId);
+
             return ResponseEntity.ok(Map.of(
                     "message", "Test assigned successfully to " + candidate.getFullName(),
                     "candidateId", candidateId,
@@ -1133,9 +1184,10 @@ public class HrRestController {
                 : candidate.getExperienceLevel() != null && !candidate.getExperienceLevel().isBlank()
                         ? candidate.getExperienceLevel()
                         : "Candidate");
-        summary.put("selectionStatus", candidate.getSelectionStatus() != null && !candidate.getSelectionStatus().isBlank()
-                ? candidate.getSelectionStatus()
-                : "Under Review");
+        summary.put("selectionStatus",
+                candidate.getSelectionStatus() != null && !candidate.getSelectionStatus().isBlank()
+                        ? candidate.getSelectionStatus()
+                        : "Under Review");
         summary.put("experience", candidate.getExperience() != null ? candidate.getExperience() : 0);
         summary.put("hasAccess", hasAccess);
         return summary;
@@ -1143,26 +1195,28 @@ public class HrRestController {
 
     @SuppressWarnings("unchecked")
     private QuestionService.ManualQuestionDraft toManualQuestionDraft(Map<String, Object> payload) {
-        String subject = String.valueOf(payload.getOrDefault("subject", "")).trim();
-        String questionType = String.valueOf(payload.getOrDefault("questionType", "MCQ")).trim();
-        String questionText = String.valueOf(payload.getOrDefault("questionText", ""));
-        String correctAnswer = String.valueOf(payload.getOrDefault("correctAnswer", ""));
-        String codingDescription = String.valueOf(payload.getOrDefault("codingDescription", ""));
+        // CHANGED: Read manual-builder JSON safely. String.valueOf(null) produces
+        // the literal text "null", which made edits fail validation for some payloads.
+        String subject = getPayloadString(payload, "subject", "").trim();
+        String questionType = getPayloadString(payload, "questionType", "MCQ").trim();
+        String questionText = getPayloadString(payload, "questionText", "");
+        String correctAnswer = getPayloadString(payload, "correctAnswer", "");
+        String codingDescription = getPayloadString(payload, "codingDescription", "");
 
         List<String> options = payload.get("options") instanceof List<?> rawOptions
                 ? rawOptions.stream()
-                    .map(item -> item == null ? "" : String.valueOf(item))
-                    .toList()
+                        .map(this::safeString)
+                        .toList()
                 : List.of();
 
         List<QuestionService.ManualTestCaseDraft> testCases = payload.get("testCases") instanceof List<?> rawCases
                 ? rawCases.stream()
-                    .filter(Map.class::isInstance)
-                    .map(Map.class::cast)
-                    .map(testCase -> new QuestionService.ManualTestCaseDraft(
-                            String.valueOf(testCase.getOrDefault("input", "")),
-                            String.valueOf(testCase.getOrDefault("expectedOutput", ""))))
-                    .toList()
+                        .filter(Map.class::isInstance)
+                        .map(Map.class::cast)
+                        .map(testCase -> new QuestionService.ManualTestCaseDraft(
+                                getPayloadString(testCase, "input", ""),
+                                getPayloadString(testCase, "expectedOutput", "")))
+                        .toList()
                 : List.of();
 
         return new QuestionService.ManualQuestionDraft(
@@ -1175,7 +1229,19 @@ public class HrRestController {
                 testCases);
     }
 
-    private Map<String, Object> buildReviewPayload(Long candidateId, com.virtuehire.model.CandidateTestMapping mapping) {
+    private String getPayloadString(Map<?, ?> payload, String key, String defaultValue) {
+        if (payload == null || !payload.containsKey(key)) {
+            return defaultValue;
+        }
+        return safeString(payload.get(key));
+    }
+
+    private String safeString(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private Map<String, Object> buildReviewPayload(Long candidateId,
+            com.virtuehire.model.CandidateTestMapping mapping) {
         List<com.virtuehire.model.AssessmentResult> results = assessmentResultService
                 .getCandidateResults(candidateId, mapping.getTestName()).stream()
                 .sorted(Comparator.comparingInt(com.virtuehire.model.AssessmentResult::getLevel)
@@ -1188,7 +1254,8 @@ public class HrRestController {
                 .map(assessment -> assessmentService.getAssessmentSections(assessment.getId()).size())
                 .orElse(0);
 
-        var submission = hiringWorkflowService.getSubmissionForCandidateTest(candidateId, mapping.getTestId()).orElse(null);
+        var submission = hiringWorkflowService.getSubmissionForCandidateTest(candidateId, mapping.getTestId())
+                .orElse(null);
 
         List<Map<String, Object>> resultSummaries = results.stream()
                 .map(result -> {
@@ -1228,7 +1295,8 @@ public class HrRestController {
         }
 
         try {
-            return objectMapper.readValue(answersJson, new TypeReference<List<Map<String, Object>>>() {});
+            return objectMapper.readValue(answersJson, new TypeReference<List<Map<String, Object>>>() {
+            });
         } catch (Exception ex) {
             return List.of();
         }
@@ -1368,8 +1436,10 @@ public class HrRestController {
         return safeFileName;
     }
 
-    // ------------------ CANDIDATE CUMULATIVE RESULTS (BADGES/EXPERT STATUS) ------------------
-    // FIX: Added endpoint so HR can see candidate Expert badges with verified indicator
+    // ------------------ CANDIDATE CUMULATIVE RESULTS (BADGES/EXPERT STATUS)
+    // ------------------
+    // FIX: Added endpoint so HR can see candidate Expert badges with verified
+    // indicator
     @GetMapping("/candidates/{candidateId}/cumulative-results")
     public ResponseEntity<?> getCandidateCumulativeResults(@PathVariable Long candidateId, HttpSession session) {
         Hr hr = (Hr) session.getAttribute("hr");
@@ -1391,7 +1461,8 @@ public class HrRestController {
         }
 
         // Get cumulative results with badge info (e.g., "Java1 Expert")
-        List<Map<String, Object>> cumulativeResults = assessmentResultService.getCandidateCumulativeResults(candidateId);
+        List<Map<String, Object>> cumulativeResults = assessmentResultService
+                .getCandidateCumulativeResults(candidateId);
 
         return ResponseEntity.ok(Map.of(
                 "candidateId", candidateId,

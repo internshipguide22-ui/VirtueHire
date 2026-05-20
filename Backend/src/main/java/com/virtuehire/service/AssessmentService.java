@@ -63,7 +63,7 @@ public class AssessmentService {
         for (Map<String, Object> sec : sectionsData) {
             String subject = normalizeSkill(asString(sec.get("subject")), hrId);
             int requestedCount = asPositiveInt(sec.get("questionCount"), "Question count");
-            String sectionMode = normalizeSectionMode(asString(sec.get("sectionMode")));
+            String sectionMode = normalizeSectionMode(asString(sec.get("sectionMode")), subject);
             List<Question> availableQuestions = getQuestionsForMode(subject, sectionMode, hrId);
 
             long availableCount = availableQuestions.size();
@@ -91,7 +91,7 @@ public class AssessmentService {
             int requestedCount = asPositiveInt(sec.get("questionCount"), "Question count");
             int timeLimit = asPositiveInt(sec.get("timeLimit"), "Time limit");
             int passPercentage = asPercentage(sec.get("passPercentage"));
-            String sectionMode = normalizeSectionMode(asString(sec.get("sectionMode")));
+            String sectionMode = normalizeSectionMode(asString(sec.get("sectionMode")), subject);
             String supportedLanguages = String.join(",", toStringList(sec.get("supportedLanguages")));
 
             AssessmentSection section = new AssessmentSection(
@@ -355,6 +355,47 @@ public class AssessmentService {
         assessmentRepo.save(a);
     }
 
+    @Transactional
+    public void updateSectionMode(Long assessmentId, String sectionMode, String supportedLanguages) {
+        Assessment assessment = assessmentRepo.findById(assessmentId)
+                .orElseThrow(() -> new RuntimeException("Assessment not found"));
+
+        List<AssessmentSection> sections = getAssessmentSections(assessmentId);
+        if (sections.isEmpty()) {
+            throw new RuntimeException("No sections found for this assessment");
+        }
+
+        String normalizedMode = normalizeSectionMode(sectionMode);
+        for (AssessmentSection section : sections) {
+            section.setSectionMode(normalizedMode);
+            if (supportedLanguages != null && !supportedLanguages.isBlank()) {
+                section.setSupportedLanguages(supportedLanguages);
+            }
+            sectionRepo.save(section);
+        }
+
+        // Re-assign questions based on new mode
+        for (AssessmentSection section : sections) {
+            List<AssessmentQuestion> existingAqs = aqRepo.findBySectionId(section.getId());
+            aqRepo.deleteAll(existingAqs);
+
+            List<Question> availableQuestions = getQuestionsForMode(section.getSubject(), normalizedMode, null);
+            if (availableQuestions.size() < section.getQuestionCount()) {
+                throw new RuntimeException("Only " + availableQuestions.size() + " " + formatModeLabel(normalizedMode)
+                        + " questions available for " + section.getSubject() + ".");
+            }
+
+            List<Question> selectedQs = new ArrayList<>(availableQuestions)
+                    .subList(0, Math.min(section.getQuestionCount(), availableQuestions.size()));
+
+            List<AssessmentQuestion> newAqs = new ArrayList<>();
+            for (Question q : selectedQs) {
+                newAqs.add(new AssessmentQuestion(assessment, section, q));
+            }
+            aqRepo.saveAll(newAqs);
+        }
+    }
+
     public String buildSkillSignature(List<String> skills) {
         if (skills == null) {
             return "";
@@ -465,6 +506,18 @@ public class AssessmentService {
             return "NO_COMPILER";
         }
         return "COMPILER".equalsIgnoreCase(sectionMode.trim()) ? "COMPILER" : "NO_COMPILER";
+    }
+
+    private String normalizeSectionMode(String sectionMode, String subject) {
+        // Auto-detect compiler mode based on subject name
+        if (subject != null && !subject.isBlank()) {
+            String lowerSubject = subject.toLowerCase();
+            if (lowerSubject.contains("code") || lowerSubject.contains("coding")) {
+                return "COMPILER";
+            }
+        }
+        // Fall back to manual mode selection
+        return normalizeSectionMode(sectionMode);
     }
 
     private String asString(Object rawValue) {

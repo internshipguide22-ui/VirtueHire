@@ -139,6 +139,13 @@ public class CandidateService {
         return repo.findAll();
     }
 
+    public void refreshAllAssessmentAssignments() {
+        List<Candidate> candidates = repo.findAll();
+        for (Candidate candidate : candidates) {
+            refreshAssessmentAssignment(candidate);
+        }
+    }
+
     public Optional<Candidate> findById(Long id) {
         return repo.findById(id);
     }
@@ -312,13 +319,12 @@ public class CandidateService {
     }
 
     private void applyAssessmentAssignment(Candidate candidate) {
-        List<String> existingAssignments = getAssignedAssessmentNames(candidate).stream()
-                .filter(assessmentService::isAutoAssignableAssessmentName)
-                .toList();
+        List<String> existingAssignments = getAssignedAssessmentNames(candidate);
         List<String> displaySkills = extractDisplaySkills(candidate.getSkills());
 
         if (displaySkills.isEmpty()) {
-            // Preserve any manually/admin/HR assigned assessments even when skills are absent.
+            // Preserve any manually/admin/HR assigned assessments even when skills are
+            // absent.
             if (existingAssignments.isEmpty()) {
                 candidate.setAssignedAssessmentName(null);
                 candidate.setAssessmentAssignmentStatus("NO_SKILLS_SELECTED");
@@ -333,8 +339,8 @@ public class CandidateService {
             return;
         }
 
-        List<com.virtuehire.model.Assessment> matchedAssessments =
-                assessmentService.findAssessmentsForSkills(displaySkills);
+        List<com.virtuehire.model.Assessment> matchedAssessments = assessmentService
+                .findAssessmentsForSkills(displaySkills);
 
         if (!matchedAssessments.isEmpty()) {
             // Collect ALL matched assessment names, not just the first one
@@ -362,7 +368,8 @@ public class CandidateService {
                             .noneMatch(covered -> assessmentService.skillsMatch(covered, skill)))
                     .toList();
 
-            // Store merged names comma-separated — getAssignedAssessmentNames() splits them back
+            // Store merged names comma-separated — getAssignedAssessmentNames() splits them
+            // back
             candidate.setAssignedAssessmentName(String.join(",", mergedAssignments));
             candidate.setAssessmentAssignmentStatus("ASSIGNED");
 
@@ -379,7 +386,8 @@ public class CandidateService {
             return;
         }
 
-        // No skill-based match found. Preserve existing manual/admin/HR assignments if present.
+        // No skill-based match found. Preserve existing manual/admin/HR assignments if
+        // present.
         if (!existingAssignments.isEmpty()) {
             candidate.setAssignedAssessmentName(String.join(",", existingAssignments));
             candidate.setAssessmentAssignmentStatus("ASSIGNED");
@@ -489,10 +497,10 @@ public class CandidateService {
                     int experience = candidate.getExperience() != null ? candidate.getExperience() : 0;
                     return switch (experienceFilter.toLowerCase()) {
                         case "0-1" -> experience <= 1;
-                        case "1"   -> experience == 1;
-                        case "2+"  -> experience >= 2;
-                        case "3+"  -> experience >= 3;
-                        default    -> true;
+                        case "1" -> experience == 1;
+                        case "2+" -> experience >= 2;
+                        case "3+" -> experience >= 3;
+                        default -> true;
                     };
                 })
                 .sorted((first, second) -> {
